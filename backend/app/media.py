@@ -26,6 +26,22 @@ def clip_path(clip: dict, streamer_login: str) -> Path:
     return lib / streamer_login / f"{date}_{_slug(clip['title'])}_{clip['id'][-8:]}.mp4"
 
 
+def temp_dir() -> Path:
+    """Where a clip's video sits while the AI watches it. Emptied on every start."""
+    return config.DATA_DIR / "watching"
+
+
+def clear_temp() -> int:
+    """Delete videos left behind by a crash or power cut. Returns how many."""
+    n = 0
+    if temp_dir().exists():
+        for f in temp_dir().iterdir():
+            if f.is_file():
+                f.unlink(missing_ok=True)
+                n += 1
+    return n
+
+
 def frames_dir(clip_id: str) -> Path:
     return config.DATA_DIR / "frames" / re.sub(r"[^\w-]", "_", clip_id)
 
@@ -130,9 +146,14 @@ def _upgrade_ytdlp_in_background() -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
-def download(clip: dict, streamer_login: str, http=None) -> Path:
-    """yt-dlp first; if that fails, Twitch's own playback API directly."""
-    target = clip_path(clip, streamer_login)
+def download(clip: dict, streamer_login: str, http=None, temp: bool = False) -> Path:
+    """yt-dlp first; if that fails, Twitch's own playback API directly.
+
+    temp=True puts the video in the watching folder (deleted after analysis)
+    instead of your clip library.
+    """
+    safe_id = re.sub(r"[^\w-]", "_", clip["id"])
+    target = temp_dir() / f"{safe_id}.mp4" if temp else clip_path(clip, streamer_login)
     if target.exists() and target.stat().st_size > 0:
         return target
     target.parent.mkdir(parents=True, exist_ok=True)

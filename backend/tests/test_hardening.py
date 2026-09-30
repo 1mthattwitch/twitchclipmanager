@@ -118,6 +118,7 @@ def test_cuda_runtime_error_falls_back_to_cpu(monkeypatch, tmp_path):
     monkeypatch.setattr(transcribe, "_load", fake_load)
     monkeypatch.setattr(transcribe, "_load_error", None)
     monkeypatch.setattr(transcribe, "_cpu_only", False)
+    monkeypatch.setattr(transcribe, "decode_audio", lambda video: [0.0] * 16000)
     assert transcribe.transcribe(tmp_path / "x.mp4") == [{"start": 0.0, "end": 1.0, "text": "hi"}]
     assert loads == ["cuda", "cpu"]
 

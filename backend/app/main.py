@@ -50,6 +50,9 @@ async def lifespan(app: FastAPI):
     _setup_logging()
     logging.getLogger(__name__).info("Clip Manager starting")
     db.connect()
+    removed = media.clear_temp()
+    if removed:
+        logging.getLogger(__name__).info("Removed %s leftover video(s) from an interrupted analysis", removed)
     if os.environ.get("TCM_NO_WORKER") != "1":
         worker.start()
         threading.Thread(target=_autostart_ollama, daemon=True).start()

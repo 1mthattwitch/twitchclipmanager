@@ -35,7 +35,7 @@ def test_full_pipeline_with_stub(monkeypatch, tmp_path):
     frame = tmp_path / "f.jpg"
     frame.write_bytes(b"jpg")
     stub = StubProvider()
-    monkeypatch.setattr(media, "download", lambda clip, login: video)
+    monkeypatch.setattr(media, "download", lambda clip, login, **k: video)
     monkeypatch.setattr(media, "extract_frames", lambda *a, **k: [{"path": str(frame), "t": 4.0}])
     monkeypatch.setattr(transcribe, "transcribe", lambda p: [{"start": 3.9, "end": 5, "text": "NO WAY"}])
     monkeypatch.setattr(analyze, "get_provider", lambda name=None: stub)
@@ -87,7 +87,7 @@ def test_pipeline_survives_missing_speech_model(monkeypatch, tmp_path):
     seen_prompts = []
     orig = stub.generate_json
     stub.generate_json = lambda s, p, i, sc: (seen_prompts.append(p), orig(s, p, i, sc))[1]
-    monkeypatch.setattr(media, "download", lambda clip, login: video)
+    monkeypatch.setattr(media, "download", lambda clip, login, **k: video)
     monkeypatch.setattr(media, "extract_frames", lambda *a, **k: [{"path": str(frame), "t": 4.0}])
 
     def broken_load():

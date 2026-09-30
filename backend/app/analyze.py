@@ -188,7 +188,8 @@ def run_pipeline(clip_id: str, provider_name: str | None = None, progress: Progr
     path = Path(clip["file_path"]) if clip.get("file_path") else None
     downloaded_now = False
     if not path or not path.exists():
-        path = media.download(clip, clip["streamer_login"])
+        # Unless you keep videos, the clip goes to a temporary folder, never your library.
+        path = media.download(clip, clip["streamer_login"], temp=not s.keep_videos)
         downloaded_now = True
         db.update("clips", "id", clip_id, file_path=str(path))
 
