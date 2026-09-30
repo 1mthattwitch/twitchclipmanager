@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+pydantic>=2.7
+numpy>=1.26
+yt-dlp>=2025.1.1
+imageio-ffmpeg>=0.5  # bundled FFmpeg if you don't have one installed
+anthropic>=1.0
+# Offline / local extras (recommended). Remove if you only use Claude online.
+faster-whisper>=1.1
+fastembed>=0.5
