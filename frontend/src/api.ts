@@ -28,7 +28,7 @@ export type QA = {
 
 export type QueueInfo = {
   paused: { reason: string; at: number; auto: boolean } | null;
-  error_groups: { reason: string; count: number }[];
+  error_groups: { reason: string; count: number; old: boolean }[];
   eta_seconds: number | null;
 };
 

@@ -36,6 +36,8 @@ def server(tmp_path_factory):
         pytest.skip("frontend not built")
     port = free_port()
     data = tmp_path_factory.mktemp("e2e")
+    global DATA
+    DATA = data
     env = {k: v for k, v in os.environ.items() if k != "TCM_NO_WORKER"}  # the demo needs its worker
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("demo_server.py")), str(data), str(port)], env=env)
     url = f"http://127.0.0.1:{port}"
@@ -229,3 +231,21 @@ def test_paused_queue_banner_and_resume(page, server):
     banner.get_by_role("button", name="Resume").click()
     expect(pg.get_by_role("alert")).to_have_count(0)
     assert httpx.get(server + "/api/jobs").json()["paused"] is None
+
+
+def test_old_failures_are_marked_as_before_restart(page, server):
+    """Failures from before the app started are shown as possibly already fixed."""
+    import sqlite3
+    import httpx
+    con = sqlite3.connect(DATA / "clips.db")
+    con.execute("INSERT INTO jobs (kind, clip_id, params, status, message, created_at, updated_at) "
+                "VALUES ('analyze', 'old1', '{}', 'error', ?, 0, 1)",
+                ["open() got an unexpected keyword argument 'metadata_errors'"])
+    con.commit()
+    con.close()
+    pg = page
+    pg.get_by_role("button", name="Queue").first.click()
+    section = pg.get_by_role("region", name="Why clips failed")
+    expect(section).to_contain_text("metadata_errors")
+    expect(section).to_contain_text("Before the last restart")
+    httpx.post(server + "/api/jobs/clear-finished", headers={"X-Clip-Manager": "1"})

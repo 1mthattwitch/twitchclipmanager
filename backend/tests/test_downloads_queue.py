@@ -217,7 +217,7 @@ def test_queue_endpoints_pause_resume_groups_and_estimate():
     with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
         r = c.get("/api/jobs").json()
         assert r["paused"] is None
-        assert r["error_groups"][0] == {"reason": "Ollama isn't running", "count": 2}
+        assert r["error_groups"][0] == {"reason": "Ollama isn't running", "count": 2, "old": True}
         assert r["eta_seconds"] == 180.0  # 3 waiting x 60 s average
         assert c.post("/api/jobs/pause").status_code == 200
         assert c.get("/api/jobs").json()["paused"]["reason"] == "Paused by you"
@@ -395,3 +395,17 @@ def test_version_unknown_without_git(monkeypatch):
     monkeypatch.setattr(subprocess, "run", no_git)
     assert diagnostics._git_version() == "unknown"
     monkeypatch.setattr(diagnostics, "_version", None)
+
+
+def test_failures_from_before_this_start_are_marked_old(monkeypatch):
+    monkeypatch.setattr(worker, "STARTED_AT", 1000.0)
+    add = "INSERT INTO jobs (kind, clip_id, params, status, message, created_at, updated_at) VALUES ('analyze', ?, '{}', 'error', ?, 0, ?)"
+    for i in range(5):
+        db.execute(add, [f"o{i}", "open() got an unexpected keyword argument 'metadata_errors'", 500.0])
+    db.execute(add, ["n1", "Ollama isn't running", 2000.0])
+    groups = worker.error_groups()
+    assert groups[0] == {"reason": "Ollama isn't running", "count": 1, "old": False}  # current first
+    assert groups[1]["old"] is True and groups[1]["count"] == 5
+    # one new failure with the same reason makes the whole group current again
+    db.execute(add, ["o9", "open() got an unexpected keyword argument 'metadata_errors'", 2000.0])
+    assert not [g for g in worker.error_groups() if g["old"]]
