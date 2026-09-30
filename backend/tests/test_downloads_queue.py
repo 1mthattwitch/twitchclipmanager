@@ -90,7 +90,7 @@ def _pipeline(monkeypatch, tmp_path):
     frame = tmp_path / "f.jpg"
     frame.write_bytes(b"x")
 
-    def fake_download(clip, login):
+    def fake_download(clip, login, **k):
         video.write_bytes(VIDEO)
         return video
     monkeypatch.setattr(media, "download", fake_download)
@@ -261,3 +261,100 @@ def test_video_deleted_even_when_transcription_crashes(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError):
         analyze.run_pipeline("c1")
     assert not video.exists() and analyze.get_clip("c1")["file_path"] is None
+
+
+def test_sorting_thousands_of_clips_leaves_no_videos_on_disk(monkeypatch, tmp_path):
+    """The real queue, the real download function (Twitch faked): nothing piles up."""
+    import threading
+    from pathlib import Path
+    written = []
+
+    def fake_ytdlp(clip, target):
+        target.write_bytes(VIDEO)
+        written.append(target)
+    monkeypatch.setattr(media, "_download_ytdlp", fake_ytdlp)
+    frame = tmp_path / "f.jpg"
+    frame.write_bytes(b"x")
+    monkeypatch.setattr(media, "extract_frames", lambda *a, **k: [{"path": str(frame), "t": 1.0}])
+    monkeypatch.setattr(transcribe, "transcribe", lambda p: [])
+    monkeypatch.setattr(analyze, "get_provider", lambda name=None: StubProvider())
+    monkeypatch.setattr(worker, "IDLE_SLEEP", 0.02)
+    sid = add_streamer("big")
+    n = 40
+    for i in range(n):
+        add_clip(sid, f"Clip{i:03d}", f"clip {i}")
+        worker.enqueue_analyze(f"Clip{i:03d}")
+    worker._stop.clear()
+    t = threading.Thread(target=worker._loop, args=("gpu",), daemon=True)
+    t.start()
+    import time
+    end = time.time() + 60
+    while time.time() < end and db.query_one("SELECT COUNT(*) AS n FROM clips WHERE status='done'")["n"] < n:
+        time.sleep(0.05)
+    worker._stop.set()
+    worker._wake.set()
+    t.join(5)
+    assert db.query_one("SELECT COUNT(*) AS n FROM clips WHERE status='done'")["n"] == n
+    assert len(written) == n and all(p.parent == media.temp_dir() for p in written)
+    lib = Path(config.get_settings().library_dir)
+    assert not lib.exists() or not [p for p in lib.rglob("*") if p.is_file()]  # library untouched
+    assert not [p for p in media.temp_dir().iterdir()]  # every video deleted
+    assert db.query_one("SELECT COUNT(*) AS n FROM clips WHERE file_path IS NOT NULL")["n"] == 0
+
+
+def test_leftover_videos_are_removed_on_start():
+    media.temp_dir().mkdir(parents=True, exist_ok=True)
+    (media.temp_dir() / "abc.mp4").write_bytes(VIDEO)
+    (media.temp_dir() / "abc.mp4.part").write_bytes(VIDEO)
+    with TestClient(app, headers={"X-Clip-Manager": "1"}):
+        assert list(media.temp_dir().iterdir()) == []
+
+
+# ---------- speech-to-text doesn't depend on PyAV ----------
+
+def _ffmpeg_clip(path, audio: bool):
+    import subprocess
+    ff = media.ffmpeg_exe()
+    if not ff:
+        pytest.skip("no ffmpeg")
+    args = [ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=duration=2:size=160x90:rate=10"]
+    if audio:
+        args += ["-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-shortest"]
+    subprocess.run(args + ["-pix_fmt", "yuv420p", str(path)], check=True)
+    return path
+
+
+def test_audio_decoded_by_ffmpeg(tmp_path):
+    a = transcribe.decode_audio(_ffmpeg_clip(tmp_path / "a.mp4", audio=True))
+    assert a.dtype.name == "float32" and 28000 < a.size < 36000  # ~2 s at 16 kHz
+    assert transcribe.decode_audio(_ffmpeg_clip(tmp_path / "silent.mp4", audio=False)) is None
+
+
+class _FakeWhisper:
+    def __init__(self, error=None):
+        self.error, self.got = error, None
+
+    def transcribe(self, audio, **k):
+        if self.error:
+            raise self.error
+        self.got = audio
+        seg = type("S", (), {"start": 0.0, "end": 1.0, "text": " hello "})
+        return iter([seg]), None
+
+
+def test_whisper_gets_samples_not_a_file(monkeypatch, tmp_path):
+    model = _FakeWhisper()
+    monkeypatch.setattr(transcribe, "_load", lambda: model)
+    monkeypatch.setattr(transcribe, "_load_error", None)
+    out = transcribe.transcribe(_ffmpeg_clip(tmp_path / "a.mp4", audio=True))
+    assert out == [{"start": 0.0, "end": 1.0, "text": "hello"}] and not isinstance(model.got, str)
+    assert transcribe.transcribe(_ffmpeg_clip(tmp_path / "s.mp4", audio=False)) == []
+
+
+def test_speech_error_falls_back_to_frames_instead_of_failing_the_clip(monkeypatch, tmp_path):
+    model = _FakeWhisper(TypeError("open() got an unexpected keyword argument 'metadata_errors'"))
+    monkeypatch.setattr(transcribe, "_load", lambda: model)
+    monkeypatch.setattr(transcribe, "_load_error", None)
+    assert transcribe.transcribe(_ffmpeg_clip(tmp_path / "a.mp4", audio=True)) is None
+    assert "metadata_errors" in transcribe.last_error()
+    monkeypatch.setattr(transcribe, "_load_error", None)

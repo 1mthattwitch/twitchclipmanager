@@ -106,17 +106,47 @@ def transcribe(video: Path) -> list[dict] | None:
             return None
         _load_error = None
         try:
-            return _run(model, video)
-        except RuntimeError as e:
-            # Typically missing CUDA/cuDNN libraries on Windows: fall back to the CPU.
-            if "cud" not in str(e).lower() or _model_key and _model_key[1] == "cpu":
-                raise
-            _force_cpu()
-            return _run(_load(), video)
+            audio = decode_audio(video)
+            if audio is None:
+                return []  # the clip has no sound
+            try:
+                return _run(model, audio)
+            except RuntimeError as e:
+                # Typically missing CUDA/cuDNN libraries on Windows: fall back to the CPU.
+                if "cud" not in str(e).lower() or _model_key and _model_key[1] == "cpu":
+                    raise
+                _force_cpu()
+                return _run(_load(), audio)
+        except Exception as e:
+            # Never fail the whole clip over speech: it's analysed from its frames instead.
+            _load_error = f"Speech-to-text failed: {str(e).splitlines()[0] if str(e) else type(e).__name__}"
+            return None
 
 
-def _run(model, video: Path) -> list[dict]:
-    segments, _info = model.transcribe(str(video), vad_filter=True, beam_size=5)
+def decode_audio(video: Path):
+    """16 kHz mono float32 samples via FFmpeg (None if the clip has no audio).
+
+    Done here rather than by faster-whisper, whose own decoder (PyAV) breaks
+    whenever PyAV changes its API.
+    """
+    import numpy as np
+    from .media import _require_ffmpeg
+    r = subprocess.run(
+        [_require_ffmpeg(), "-nostdin", "-loglevel", "error", "-i", str(video), "-vn",
+         "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+        capture_output=True, timeout=600,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace").strip()
+        if "does not contain any stream" in err or "matches no streams" in err or not err:
+            return None
+        raise RuntimeError(f"FFmpeg couldn't read the audio: {err.splitlines()[-1]}")
+    audio = np.frombuffer(r.stdout, dtype=np.float32)
+    return audio if audio.size else None
+
+
+def _run(model, audio) -> list[dict]:
+    segments, _info = model.transcribe(audio, vad_filter=True, beam_size=5)
     return [
         {"start": round(seg.start, 2), "end": round(seg.end, 2), "text": seg.text.strip()}
         for seg in segments if seg.text.strip()

@@ -49,7 +49,7 @@ def test_workers_sync_and_analyze_under_failures(monkeypatch, tmp_path):
     video.write_bytes(b"x")
     frame = tmp_path / "f.jpg"
     frame.write_bytes(b"x")
-    monkeypatch.setattr(media, "download", lambda c, login: video)
+    monkeypatch.setattr(media, "download", lambda c, login, **k: video)
     monkeypatch.setattr(media, "extract_frames", lambda *a, **k: [{"path": str(frame), "t": 1.0}])
     monkeypatch.setattr(transcribe, "transcribe", lambda p: [])
     provider = FlakyProvider(random.Random(7))
