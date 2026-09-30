@@ -96,10 +96,18 @@ git -C "%CM_DIR%" remote add origin "%REPO_URL%" >>"%LOG%" 2>&1
 git -C "%CM_DIR%" fetch --quiet origin >>"%LOG%" 2>&1
 if errorlevel 1 goto :fail
 :checkout
-REM Use "main" once it has the app, otherwise the development branch.
+REM Use the development branch (where fixes are pushed) unless "main" already contains
+REM everything on it, so the newest fixes install without waiting for a merge.
 set "USE_BRANCH=%BRANCH%"
 git -C "%CM_DIR%" cat-file -e "origin/main:ClipManager.bat" >nul 2>nul
-if not errorlevel 1 set "USE_BRANCH=main"
+if errorlevel 1 goto :branch_chosen
+git -C "%CM_DIR%" cat-file -e "origin/%BRANCH%:ClipManager.bat" >nul 2>nul
+if errorlevel 1 goto :use_main
+git -C "%CM_DIR%" merge-base --is-ancestor "origin/%BRANCH%" origin/main >nul 2>nul
+if errorlevel 1 goto :branch_chosen
+:use_main
+set "USE_BRANCH=main"
+:branch_chosen
 REM Repair mode: put the app's own files back exactly as on GitHub. Settings, the clip
 REM database and downloaded videos are git-ignored and never touched.
 if /i "%HERE%"=="%CM_DIR%" goto :checkout_keep_installer

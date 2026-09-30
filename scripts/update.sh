@@ -9,14 +9,26 @@ echo "Checking for updates..."
 if ! git fetch --quiet origin >/dev/null 2>&1; then
   echo "Couldn't reach GitHub. Starting the version you already have."; exit 0
 fi
-# Once "main" has the app and already contains this version, follow main from now on.
-if [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" != "main" ] \
-   && git cat-file -e origin/main:ClipManager.bat 2>/dev/null \
-   && git merge-base --is-ancestor HEAD origin/main 2>/dev/null \
-   && git diff --quiet HEAD 2>/dev/null \
-   && git checkout --quiet -B main origin/main 2>/dev/null; then
-  git branch --quiet --set-upstream-to=origin/main >/dev/null 2>&1
-  echo "Switched to the main update channel."
+# Follow whichever of "main" and the development branch (where fixes are pushed) is
+# newer, so fixes arrive without anyone having to merge them on GitHub first. Only
+# branches this copy can fast-forward to are considered.
+DEV="${CM_BRANCH:-claude/nifty-goodall-p83xy1}"
+ok() { git cat-file -e "origin/$1:ClipManager.bat" 2>/dev/null && git merge-base --is-ancestor HEAD "origin/$1" 2>/dev/null; }
+CHANNEL=""
+if ok "$DEV"; then
+  CHANNEL="$DEV"
+  # main already contains everything on the development branch: prefer main.
+  if ok main && git merge-base --is-ancestor "origin/$DEV" origin/main 2>/dev/null; then CHANNEL=main; fi
+elif ok main; then
+  CHANNEL=main
+fi
+CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ -n "$CHANNEL" ] && [ "$CUR" != "$CHANNEL" ] && git branch --quiet -f "$CHANNEL" HEAD 2>/dev/null; then
+  # Same commit, so no files change here; the update below does the rest.
+  git symbolic-ref HEAD "refs/heads/$CHANNEL"
+  git branch --quiet --set-upstream-to="origin/$CHANNEL" >/dev/null 2>&1
+  if [ "$CHANNEL" = main ]; then echo "Switched to the main update channel."
+  else echo "Switched to the newest-fixes update channel."; fi
 fi
 LOCAL=$(git rev-parse HEAD 2>/dev/null)
 REMOTE=$(git rev-parse '@{u}' 2>/dev/null) || { echo "This copy isn't linked to an update channel."; exit 0; }

@@ -32,10 +32,24 @@ if errorlevel 1 (
   exit /b 0
 )
 
-REM Once "main" has the app and already contains this version, follow main from now on.
+REM Follow whichever of "main" and the development branch (where fixes are pushed) is
+REM newer, so fixes arrive without anyone having to merge them on GitHub first. Only
+REM branches this copy can fast-forward to are considered.
+set "DEV=claude/nifty-goodall-p83xy1"
+if defined CM_BRANCH set "DEV=%CM_BRANCH%"
+call :pick_channel
+if not defined CHANNEL goto :channel_ok
 set "CUR="
 for /f "delims=" %%A in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CUR=%%A"
-if /i "%CUR%"=="main" goto :channel_ok
+if /i "%CUR%"=="%CHANNEL%" goto :channel_ok
+REM Same commit, so no files change here; the update below does the rest.
+git branch --quiet -f "%CHANNEL%" HEAD >nul 2>nul
+if errorlevel 1 goto :channel_ok
+git symbolic-ref HEAD "refs/heads/%CHANNEL%" >nul 2>nul
+git branch --quiet --set-upstream-to="origin/%CHANNEL%" >nul 2>nul
+if /i "%CHANNEL%"=="main" echo Switched to the main update channel.
+if /i not "%CHANNEL%"=="main" echo Switched to the newest-fixes update channel.
+:channel_ok
 git cat-file -e "origin/main:ClipManager.bat" >nul 2>nul
 if errorlevel 1 goto :channel_ok
 git merge-base --is-ancestor HEAD origin/main >nul 2>nul
@@ -91,4 +105,30 @@ exit /b 0
 :blocked
 echo An update is available, but files in the app folder were edited so it can't be applied.
 echo Run install.bat to repair it. Your clips and settings are kept.
+exit /b 0
+
+:pick_channel
+REM Sets CHANNEL to the development branch or "main", or leaves it empty.
+set "CHANNEL="
+set "OK_DEV="
+set "OK_MAIN="
+call :can_reach "%DEV%" OK_DEV
+call :can_reach main OK_MAIN
+if not defined OK_DEV goto :pick_main
+set "CHANNEL=%DEV%"
+REM main already contains everything on the development branch: prefer main.
+if not defined OK_MAIN exit /b 0
+git merge-base --is-ancestor "origin/%DEV%" origin/main >nul 2>nul
+if not errorlevel 1 set "CHANNEL=main"
+exit /b 0
+:pick_main
+if defined OK_MAIN set "CHANNEL=main"
+exit /b 0
+
+:can_reach
+REM Sets %2=1 if origin/%1 has the app and this copy can fast-forward to it.
+git cat-file -e "origin/%~1:ClipManager.bat" >nul 2>nul
+if errorlevel 1 exit /b 0
+git merge-base --is-ancestor HEAD "origin/%~1" >nul 2>nul
+if not errorlevel 1 set "%~2=1"
 exit /b 0

@@ -79,6 +79,7 @@ export function SettingsPage({ theme, setTheme, onSaved, onRunSetup }: { theme: 
       <Group title="Setup & help" footer="If something isn't working, press Copy diagnostics and paste the result into your message when asking for help. Keys and passwords are never included.">
         <Row label="Run the setup wizard" detail="Twitch keys, AI, model folder, Resolve" onClick={() => onRunSetup(1)}><span className="text-label3">›</span></Row>
         <Row label="Offline AI model folder" detail={String(v.ollama_models_dir || "chosen automatically")} onClick={() => onRunSetup(2)}><span className="text-label3">›</span></Row>
+        <Row label="Version" detail="Updates install when you start Clip Manager"><span className="text-[15px] text-label2">{status?.version ?? "…"}</span></Row>
         <Row label="Copy diagnostics" onClick={copyDiagnostics}><span className="text-accent text-[15px]">Copy</span></Row>
         <Row label="Open Claude chat" detail="Ask for fixes or new features" onClick={() => window.open(String(v.help_chat_url), "_blank", "noopener")}><span className="text-accent text-[15px]">Open</span></Row>
         <Row label="Open the chat when Clip Manager starts" last>

@@ -54,6 +54,7 @@ You can rerun the wizard any time from **Settings → Run the setup wizard**.
 | Situation | What happens |
 |---|---|
 | A new version is available | It downloads it, then reinstalls components only if the update needs new ones |
+| A fix was pushed but not merged on GitHub yet | It gets it anyway: it checks both `main` and the branch fixes are pushed to, and uses whichever is newer. Nothing has to be merged by hand |
 | You're offline | It starts the version you already have |
 | An update can't be applied (a file in use, or app files edited by hand) | It keeps the working version and tells you. Running `install.bat` again repairs it |
 
@@ -110,7 +111,7 @@ Iterating toward zero errors: run `spotcheck`, change one thing, and repeat. Thi
 | Search (keyword only) | 45 normal + 20 synonym + 20 held-out labelled queries | Normal 100% top-1 · synonyms 90% top-1 / 100% top-5 · held-out 95% top-1 / 100% top-5 |
 | UI | Playwright in Chromium: search, filters, clip sheet, ask, correct, analyse, select, Resolve queue, settings, light mode, phone layout; repeated 5× | All pass, zero console errors, no horizontal scroll at 390 px |
 | Frame extraction | Real FFmpeg on a generated 12 s video | Frames at the expected timestamps |
-| Windows install & updates | 16 scenarios, 46 checks: fresh install from a lone install.bat, updates (including ones that rewrite the running launcher), offline, edited files, repair, ZIP adoption, a failing install, a crash, switching to `main` | All pass; failures produce a problem report naming the step, with the pip error in the log |
+| Windows install & updates | 18 scenarios: fresh install from a lone install.bat, updates (including ones that rewrite the running launcher), offline, edited files, repair, ZIP adoption, a failing install, a crash, switching to `main`, an unmerged fix arriving anyway and then moving back to `main` once merged | All pass; failures produce a problem report naming the step, with the pip error in the log |
 | Existing Ollama models | Fake L: and J: drives laid out like the real ones, next to image-generation models, on Windows Python | Finds both stores, uses the one with a vision model, prefers L: when both have it, sets `OLLAMA_MODELS`, skips the 6 GB download, and leaves other folders untouched |
 | Clip downloads | Fake Twitch playback API: yt-dlp failing, deleted clip, blocked video server, several qualities | Falls back to Twitch's own playback API, picks the best quality, clear per-clip error for deleted clips, no partial files left |
 | Queue under a broken setup | 5 identical failures; mixed failures; deleted clips; pause, resume and retry endpoints; paused banner in the browser | Pauses on the 5th identical failure only, waiting clips stay queued, retry resumes |

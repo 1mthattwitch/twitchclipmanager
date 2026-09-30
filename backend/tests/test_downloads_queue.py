@@ -358,3 +358,40 @@ def test_speech_error_falls_back_to_frames_instead_of_failing_the_clip(monkeypat
     assert transcribe.transcribe(_ffmpeg_clip(tmp_path / "a.mp4", audio=True)) is None
     assert "metadata_errors" in transcribe.last_error()
     monkeypatch.setattr(transcribe, "_load_error", None)
+
+
+# ---------- a pause from last session doesn't outlive an update ----------
+
+def test_automatic_pause_is_cleared_on_start():
+    worker.pause("open() got an unexpected keyword argument 'metadata_errors'", auto=True)
+    config._cached = None  # as if the app restarted
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
+        assert c.get("/api/jobs").json()["paused"] is None
+
+
+def test_manual_pause_survives_restart():
+    worker.pause()
+    config._cached = None
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
+        assert c.get("/api/jobs").json()["paused"]["reason"] == "Paused by you"
+    worker.resume()
+
+
+def test_status_reports_running_version(monkeypatch):
+    from app.services import diagnostics
+    monkeypatch.setattr(diagnostics, "_version", None)
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
+        v = c.get("/api/status").json()["version"]
+    assert v == "unknown" or len(v.split()[0]) >= 7
+
+
+def test_version_unknown_without_git(monkeypatch):
+    import subprocess
+    from app.services import diagnostics
+    monkeypatch.setattr(diagnostics, "_version", None)
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr(subprocess, "run", no_git)
+    assert diagnostics._git_version() == "unknown"
+    monkeypatch.setattr(diagnostics, "_version", None)
