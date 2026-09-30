@@ -21,26 +21,40 @@ Add any streamer and the app pulls **every** public clip. An AI then *watches* e
 - **DaVinci Resolve Studio.** One click imports clips into bins (`Twitch Clips / Streamer / Category`). The summary goes into Comments, tags into Keywords, the title into Description, and each moment becomes a colour-coded marker. Optionally the clip is appended to your timeline, trimmed to the suggested cut.
 - **iPhone-style interface.** Dark/light mode, frosted bars, bottom sheets, and hover-to-preview. Drag a card straight into Resolve or Explorer.
 
-## Setup (Windows, about 15 minutes)
+## Setup (Windows)
 
-1. **Install Python 3.10+** from [python.org](https://www.python.org/downloads/). Tick “Add Python to PATH”.
+**First time, one file does everything:**
+
+1. Download **[install.bat](https://raw.githubusercontent.com/1mthattwitch/twitchclipmanager/claude/nifty-goodall-p83xy1/install.bat)** (right-click the link → *Save link as…*), then double-click it. If Windows shows “Windows protected your PC”, click *More info → Run anyway*.
+   - It installs Git and Python if you don't have them (using Windows' built-in `winget`).
+   - It downloads the app to `%USERPROFILE%\twitchclipmanager` and installs its components.
+   - It asks whether to install the **offline AI** (Ollama plus a ~6 GB model that fits an 8 GB card).
+   - It puts a **Clip Manager** icon on your desktop, then starts the app.
 2. **Get free Twitch keys** at [dev.twitch.tv/console](https://dev.twitch.tv/console/apps/create) → *Register Your Application*:
    - Name: anything (e.g. `my-clip-manager`)
    - OAuth Redirect URL: `http://localhost`
    - Category: *Other* · Client type: *Confidential*
    - Click *Manage* → copy the **Client ID**, then press **New Secret** and copy that too.
-3. **Pick your AI** (you can switch any time in Settings):
-   - **Offline (Local):** install [Ollama](https://ollama.com/download), open a terminal and run
-     `ollama pull qwen2.5vl:7b` (≈6 GB, fits an 8 GB card).
-   - **Online (Claude):** create an API key at [console.anthropic.com](https://console.anthropic.com/settings/keys) and add some credit. Settings shows the estimated cost per clip for each model.
-4. **Double-click `scripts/start.bat`.** The first run installs everything, then your browser opens at `http://localhost:8765`.
-5. In **Settings**, paste the Twitch ID/secret (and the Claude key if you have one). In **Streamers**, add someone and choose how far back to fetch.
+3. *(Optional)* For the online AI, create a Claude API key at [console.anthropic.com](https://console.anthropic.com/settings/keys) and add some credit. Settings shows the estimated cost per clip for each model.
+4. In the app's **Settings**, paste the Twitch ID/secret (and the Claude key if you have one). In **Streamers**, add someone and choose how far back to fetch.
 
-macOS/Linux: run `scripts/start.sh` instead.
+**Every day:** double-click the **Clip Manager** desktop icon (it runs `ClipManager.bat` in the app folder).
+
+**Updates are automatic.** Every start checks GitHub first:
+
+| Situation | What happens |
+|---|---|
+| A new version is available | It downloads it, then reinstalls components only if the update needs new ones |
+| You're offline | It starts the version you already have |
+| An update can't be applied (a file in use, or app files edited by hand) | It keeps the working version and tells you. Running `install.bat` again repairs it |
+
+Your settings, clip database and downloaded videos (`data\`, `library\`) are never touched by updates or repairs. Running `install.bat` again at any time updates and repairs an existing install. It also converts a copy you downloaded as a ZIP into one that auto-updates.
+
+macOS/Linux: run `scripts/start.sh`. It does the same update check and installs components when needed.
 
 ### Using both graphics cards
 
-Whisper (speech) and the vision model can each have their own GPU. In Settings, set Whisper's **GPU number** to `1`. Then pin Ollama to the first card: quit Ollama from the tray, run `setx CUDA_VISIBLE_DEVICES 0` in a terminal, and start Ollama again. (`start.bat` clears that variable for the Clip Manager itself, so it still sees both cards.)
+Whisper (speech) and the vision model can each have their own GPU. In Settings, set Whisper's **GPU number** to `1`. Then pin Ollama to the first card: quit Ollama from the tray, run `setx CUDA_VISIBLE_DEVICES 0` in a terminal, and start Ollama again. (The launcher clears that variable for the Clip Manager itself, so it still sees both cards.)
 
 ### DaVinci Resolve Studio
 
@@ -53,7 +67,7 @@ Clips are only downloaded once they've been analysed. Downloaded files live in `
 
 ## How accurate is it? Measuring the error rate
 
-Accuracy depends on your model, GPU and streamers, so the app lets you measure it on your own clips. From the `backend` folder, with the virtualenv active (`..\.venv\Scripts\activate`):
+Accuracy depends on your model, GPU and streamers, so the app lets you measure it on your own clips. Open PowerShell in the app's `backend` folder and prefix each command with `..\.venv\Scripts\` (e.g. `..\.venv\Scripts\python -m app.evaluate report`):
 
 ```
 python -m app.evaluate spotcheck --n 25   # you judge 25 random clips: the real error rate, with a 95% range
