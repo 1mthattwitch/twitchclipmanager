@@ -64,11 +64,11 @@ class ClaudeProvider(Provider):
         except anthropic.AuthenticationError as e:
             raise AIError("Claude rejected the API key. Check Settings.") from e
         except anthropic.RateLimitError as e:
-            raise AIError("Claude rate limit hit; the clip will be retried.") from e
+            raise AIError("Claude rate limit hit; the clip will be retried.", transient=True) from e
         except anthropic.APIStatusError as e:
-            raise AIError(f"Claude API error {e.status_code}: {e.message}") from e
+            raise AIError(f"Claude API error {e.status_code}: {e.message}", transient=e.status_code >= 500) from e
         except anthropic.APIConnectionError as e:
-            raise AIError("Couldn't reach Claude. Are you offline? Switch to Local in Settings.") from e
+            raise AIError("Couldn't reach Claude. Are you offline? Switch to Local in Settings.", transient=True) from e
 
     @staticmethod
     def _text(response) -> str:

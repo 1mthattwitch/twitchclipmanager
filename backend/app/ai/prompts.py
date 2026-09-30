@@ -59,7 +59,8 @@ You get the clip's metadata, a timestamped speech transcript and still frames ta
 Describe only what the evidence shows. If the frames and transcript don't make something clear, say so
 and lower your confidence rather than guessing. Tags should be concrete and searchable (game events,
 actions, reactions, objects, people, memes). search_phrases are short things an editor might type to
-find this clip. best_in/best_out are the seconds you'd cut the clip to for a tight edit."""
+find this clip: include casual synonyms and slang (e.g. "scared", "jumpscare", "freaks out"; "dono",
+"donation", "sends money") so keyword search finds it however it's phrased. best_in/best_out are the seconds you'd cut the clip to for a tight edit."""
 
 VERIFY_SYSTEM = """You fact-check a description of a Twitch clip against the evidence (frames + transcript).
 Pick the 2-4 most important or most doubtful claims in the description, turn each into a yes/no question,

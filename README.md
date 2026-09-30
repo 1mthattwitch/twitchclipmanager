@@ -1,0 +1,97 @@
+# Twitch Clip Manager
+
+Find the Twitch clip you need by describing what happens in it.
+
+Add any streamer and the app pulls **every** public clip. An AI then *watches* each one: it samples frames, transcribes the speech and writes a description. That gives each clip a category, tags, the key moments with timestamps and a suggested cut. You can search in plain English (“falls off his chair at a jumpscare”), ask questions about a clip, and send picks straight into **DaVinci Resolve Studio**.
+
+![Library](docs/screenshots/01-library.png)
+
+| Clip detail | Phone-sized window | Settings |
+|---|---|---|
+| ![Clip](docs/screenshots/03-clip-sheet.png) | ![Mobile](docs/screenshots/08-mobile.png) | ![Settings](docs/screenshots/06-settings.png) |
+
+## What it does
+
+- **Every clip, not just the top ones.** Twitch's API stops returning results after about 1,000 per query. The app walks back week by week and splits busy weeks until nothing is missed.
+- **AI that actually watches.** For each clip it samples about 6 frames and transcribes the audio locally with Whisper. The AI then writes a summary, a category, tags, timestamped moments, mood, energy, whether there's swearing, and a suggested in/out point.
+- **It checks its own work.** After describing a clip, the AI picks the 2–4 claims it's least sure of, turns them into yes/no questions, and answers them strictly from the evidence. Tags that don't hold up are removed. Low-confidence clips get a **Check** badge. When the app is idle it re-checks them again.
+- **Ask the clip.** A chat box on every clip, e.g. “Does anyone swear?” or “Where would you cut it?”. Answers cite timestamps. **Correct** lets you fix a summary or tags yourself. Your version is final and becomes searchable immediately.
+- **Search by meaning.** Keyword search (with a built-in streamer-slang thesaurus) is combined with meaning search from a small local model. Results jump to the matching moment.
+- **Offline or online.** *Local* uses a vision model on your graphics card via Ollama: free, private, no internet needed after setup. *Claude* is online and more accurate. You can also keep Local and have Claude **cross-check** only the clips the local AI was unsure about.
+- **DaVinci Resolve Studio.** One click imports clips into bins (`Twitch Clips / Streamer / Category`). The summary goes into Comments, tags into Keywords, the title into Description, and each moment becomes a colour-coded marker. Optionally the clip is appended to your timeline, trimmed to the suggested cut.
+- **iPhone-style interface.** Dark/light mode, frosted bars, bottom sheets, and hover-to-preview. Drag a card straight into Resolve or Explorer.
+
+## Setup (Windows, about 15 minutes)
+
+1. **Install Python 3.10+** from [python.org](https://www.python.org/downloads/). Tick “Add Python to PATH”.
+2. **Get free Twitch keys** at [dev.twitch.tv/console](https://dev.twitch.tv/console/apps/create) → *Register Your Application*:
+   - Name: anything (e.g. `my-clip-manager`)
+   - OAuth Redirect URL: `http://localhost`
+   - Category: *Other* · Client type: *Confidential*
+   - Click *Manage* → copy the **Client ID**, then press **New Secret** and copy that too.
+3. **Pick your AI** (you can switch any time in Settings):
+   - **Offline (Local):** install [Ollama](https://ollama.com/download), open a terminal and run
+     `ollama pull qwen2.5vl:7b` (≈6 GB, fits an 8 GB card).
+   - **Online (Claude):** create an API key at [console.anthropic.com](https://console.anthropic.com/settings/keys) and add some credit. Settings shows the estimated cost per clip for each model.
+4. **Double-click `scripts/start.bat`.** The first run installs everything, then your browser opens at `http://localhost:8765`.
+5. In **Settings**, paste the Twitch ID/secret (and the Claude key if you have one). In **Streamers**, add someone and choose how far back to fetch.
+
+macOS/Linux: run `scripts/start.sh` instead.
+
+### Using both graphics cards
+
+Whisper (speech) and the vision model can each have their own GPU. In Settings, set Whisper's **GPU number** to `1`. Then pin Ollama to the first card: quit Ollama from the tray, run `setx CUDA_VISIBLE_DEVICES 0` in a terminal, and start Ollama again. (`start.bat` clears that variable for the Clip Manager itself, so it still sees both cards.)
+
+### DaVinci Resolve Studio
+
+- **Direct:** in Resolve go to *Preferences → System → General → External scripting using* and choose **Local**. Then use **To Resolve** on a clip, or select several and press **To Resolve**. A project must be open.
+- **From inside Resolve:** copy `resolve/Clip Manager.py` to
+  `%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\`.
+  Press **Queue for Resolve** in the app, then run *Workspace → Scripts → Clip Manager* in Resolve.
+
+Clips are only downloaded once they've been analysed. Downloaded files live in `library/<streamer>/`, and you can change that folder in Settings.
+
+## How accurate is it? Measuring the error rate
+
+Accuracy depends on your model, GPU and streamers, so the app lets you measure it on your own clips. From the `backend` folder, with the virtualenv active (`..\.venv\Scripts\activate`):
+
+```
+python -m app.evaluate spotcheck --n 25   # you judge 25 random clips: the real error rate, with a 95% range
+python -m app.evaluate report             # self-check refutations, flagged clips, your corrections, spot-check result
+python -m app.evaluate agreement --n 40   # re-describe 40 clips with the other AI and compare categories/tags
+python -m app.evaluate search             # search accuracy with the real meaning-search model
+```
+
+Iterating toward zero errors: run `spotcheck`, change one thing, and repeat. Things to try: a bigger local model, Claude, 10 frames per clip, or Claude cross-check. `report` suggests the next step based on your numbers.
+
+## What was tested
+
+`backend/tests` has 435 automated tests plus a browser end-to-end suite:
+
+| Area | How | Result |
+|---|---|---|
+| Twitch ingest | Mock Twitch API that truncates at 1,000 results like the real one; 2,500 clips in one week | All 2,500 found |
+| Model output handling | 20,000 randomly malformed AI responses (wrong types, NaN, huge strings, missing fields) | 0 crashes |
+| Hostile input | 330 junk/injection search strings; bad API requests | 0 server errors |
+| Job runner | 60 clips through the real worker threads with an AI that fails 30% of the time; repeated 15× | Every clip ends done or failed with a reason, never stuck; transient errors retried; all 60 done after “Retry failed” |
+| Missing pieces | No speech model, no Resolve, no Ollama, no keys | Clear messages; analysis continues frames-only without Whisper |
+| Search (keyword only) | 45 normal + 20 synonym + 20 held-out labelled queries | Normal 100% top-1 · synonyms 90% top-1 / 100% top-5 · held-out 95% top-1 / 100% top-5 |
+| UI | Playwright in Chromium: search, filters, clip sheet, ask, correct, analyse, select, Resolve queue, settings, light mode, phone layout; repeated 5× | All pass, zero console errors, no horizontal scroll at 390 px |
+| Frame extraction | Real FFmpeg on a generated 12 s video | Frames at the expected timestamps |
+
+Not tested in the development sandbox (it couldn't reach Twitch, Hugging Face or a GPU): live Twitch downloads, Whisper/Ollama on CUDA, the meaning-search model, and a live Resolve import. The Resolve code is tested against a faithful fake of Resolve's API. Use the `evaluate` commands above for the real-footage numbers.
+
+Run the tests yourself:
+
+```
+cd backend
+pip install -r requirements-dev.txt playwright
+pytest                 # unit, fuzz, worker, search benchmark
+pytest tests/e2e       # browser tests (needs Chromium: python -m playwright install chromium)
+```
+
+## Development
+
+- Backend: Python / FastAPI / SQLite (FTS5), `backend/app`. `python -m app` runs it on port 8765.
+- Frontend: React + Vite + Tailwind + Motion, `frontend/`. `npm install && npm run dev` gives hot reload on port 5173 (API calls are proxied to 8765). `npm run build` updates `frontend/dist`, which is committed so non-developers don't need Node.
+- Settings and the database live in `data/` (git-ignored).

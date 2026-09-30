@@ -18,6 +18,8 @@ from .twitch import CLIPS_EPOCH, TwitchClient, iso, parse_iso
 LANES = {"net": ("sync",), "gpu": ("analyze", "verify")}
 IDLE_SLEEP = 2.0
 RECHECK_EVERY = 24 * 3600
+MAX_ATTEMPTS = 3
+RETRY_DELAY = 5.0
 
 _stop = threading.Event()
 _wake = threading.Event()
@@ -109,7 +111,8 @@ def run_sync(job: dict, client: TwitchClient | None = None) -> str:
     if not streamer:
         raise ValueError("Streamer was removed")
     client = client or TwitchClient()
-    end = datetime.now(timezone.utc)
+    # A minute of slack: Twitch's ended_at is exclusive and we send whole seconds.
+    end = datetime.now(timezone.utc) + timedelta(minutes=1)
     if params.get("since_days"):
         start = end - timedelta(days=int(params["since_days"]))
     elif streamer.get("synced_until") and not params.get("full"):
@@ -216,8 +219,20 @@ def _loop(lane: str) -> None:
             msg = run_job(job)
             db.update("jobs", "id", job["id"], status="done", progress=1.0, message=msg, updated_at=db.now())
         except Exception as e:
-            traceback.print_exc()
-            db.update("jobs", "id", job["id"], status="error", message=str(e)[:500], updated_at=db.now())
+            params = job.get("params") or {}
+            attempts = int(params.get("attempts", 0)) + 1
+            if getattr(e, "transient", False) and attempts < MAX_ATTEMPTS:
+                # Back off, then put it back in the queue behind other work.
+                params["attempts"] = attempts
+                db.update("jobs", "id", job["id"], status="queued", params=params, progress=0,
+                          message=f"{e} (retry {attempts}/{MAX_ATTEMPTS - 1})", created_at=db.now(),
+                          updated_at=db.now())
+                if job["clip_id"] and job["kind"] == "analyze":
+                    db.update("clips", "id", job["clip_id"], status="queued")
+                _stop.wait(RETRY_DELAY * attempts)
+            else:
+                traceback.print_exc()
+                db.update("jobs", "id", job["id"], status="error", message=str(e)[:500], updated_at=db.now())
         idle_since = time.time()
 
 

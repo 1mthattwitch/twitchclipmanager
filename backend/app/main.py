@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analyze, config, db, embed, media, resolve_bridge, search, worker
+from . import analyze, config, db, embed, media, resolve_bridge, search, transcribe, worker
 from .ai.base import AIError, get_provider
 from .ai.prompts import CATEGORIES
 from .twitch import TwitchClient, TwitchError
@@ -24,6 +25,8 @@ async def lifespan(app: FastAPI):
     db.connect()
     if os.environ.get("TCM_NO_WORKER") != "1":
         worker.start()
+        # Load (or first-time download) the search model without blocking startup.
+        threading.Thread(target=embed.available, daemon=True).start()
     yield
     worker.stop()
 
@@ -69,6 +72,7 @@ def status():
     except ImportError:
         out["whisper"] = False
     out["embeddings"] = embed.available()
+    out["whisper_error"] = transcribe.last_error()
     for name in ("local", "claude"):
         try:
             ok, msg = get_provider(name).available()

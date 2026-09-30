@@ -5,6 +5,6 @@ venv/
 data/
 library/
 node_modules/
-frontend/dist/
 .env
 .pytest_cache/
+*.tsbuildinfo

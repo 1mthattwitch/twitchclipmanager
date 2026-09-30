@@ -48,9 +48,9 @@ class OllamaProvider(Provider):
         try:
             r = self.http.post(f"{self.url}/api/chat", json=body)
         except httpx.HTTPError as e:
-            raise AIError(f"Couldn't reach Ollama at {self.url}: {e}") from e
+            raise AIError(f"Couldn't reach Ollama at {self.url}: {e}", transient=True) from e
         if r.status_code != 200:
-            raise AIError(f"Ollama error {r.status_code}: {r.text[:300]}")
+            raise AIError(f"Ollama error {r.status_code}: {r.text[:300]}", transient=r.status_code >= 500)
         return r.json()["message"]["content"]
 
     def generate_json(self, system: str, prompt: str, images: list[Path], schema: dict) -> dict:

@@ -185,6 +185,11 @@ def reindex_clip(clip_id: str) -> None:
     if not c:
         return
     tags = c.get("tags") or []
+    a = c.get("analysis") if isinstance(c.get("analysis"), dict) else {}
+    described = [c.get("summary"), c.get("category"), c.get("mood"),
+                 " ".join(m.get("description", "") for m in a.get("moments") or []),
+                 " ".join(a.get("search_phrases") or []), " ".join(a.get("on_screen") or []),
+                 " ".join(a.get("secondary_categories") or [])]
     conn = connect()
     conn.execute("DELETE FROM clips_fts WHERE clip_id = ?", [clip_id])
     conn.execute(
@@ -192,7 +197,7 @@ def reindex_clip(clip_id: str) -> None:
         [
             clip_id,
             c["title"] or "",
-            " ".join(filter(None, [c.get("summary"), c.get("category"), c.get("mood")])),
+            " ".join(filter(None, described)),
             " ".join(tags) if isinstance(tags, list) else str(tags),
             c.get("transcript_text") or "",
             c.get("game_name") or "",

@@ -9,7 +9,10 @@ from pathlib import Path
 
 
 class AIError(RuntimeError):
-    pass
+    def __init__(self, message: str, transient: bool = False):
+        super().__init__(message)
+        # Transient errors (rate limits, dropped connections) are retried automatically.
+        self.transient = transient
 
 
 class Provider(ABC):

@@ -74,3 +74,30 @@ def test_real_frame_extraction_with_ffmpeg(tmp_path):
     frames = media.extract_frames(video, "clip/with:odd chars", 6)
     assert [f["t"] for f in frames] == [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
     assert all(Path(f["path"]).stat().st_size > 1000 for f in frames)
+
+
+def test_pipeline_survives_missing_speech_model(monkeypatch, tmp_path):
+    sid = add_streamer("alpha")
+    add_clip(sid, "c2", "quiet", duration=10)
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    frame = tmp_path / "f.jpg"
+    frame.write_bytes(b"jpg")
+    stub = StubProvider()
+    seen_prompts = []
+    orig = stub.generate_json
+    stub.generate_json = lambda s, p, i, sc: (seen_prompts.append(p), orig(s, p, i, sc))[1]
+    monkeypatch.setattr(media, "download", lambda clip, login: video)
+    monkeypatch.setattr(media, "extract_frames", lambda *a, **k: [{"path": str(frame), "t": 4.0}])
+
+    def broken_load():
+        raise OSError("403 Forbidden while downloading model")
+    monkeypatch.setattr(transcribe, "_load", broken_load)
+    monkeypatch.setattr(transcribe, "_load_error", None)
+    monkeypatch.setattr(analyze, "get_provider", lambda name=None: stub)
+    analyze.run_pipeline("c2")
+    clip = analyze.get_clip("c2")
+    assert clip["status"] == "done"
+    assert clip["transcript"] is None
+    assert "transcript unavailable" in seen_prompts[0]
+    assert "403" in transcribe.last_error()
