@@ -9,6 +9,8 @@ set "BRANCH=claude/nifty-goodall-p83xy1"
 set "GIT_ZIP_URL=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip"
 set "PY_URL=https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 set "OLLAMA_URL=https://ollama.com/download/OllamaSetup.exe"
+REM This Claude chat: ask for fixes or changes there while the app installs.
+set "CHAT_URL=https://claude.ai/code/session_01LDpga53v3BVDvCgDVcbU4K"
 REM Overrides used by the automated tests.
 if defined CM_REPO_URL set "REPO_URL=%CM_REPO_URL%"
 if defined CM_BRANCH set "BRANCH=%CM_BRANCH%"
@@ -46,6 +48,7 @@ echo  ------------------
 echo  Installing to: %CM_DIR%
 echo  A log of every step is kept in %LOG%
 echo.
+if not "%TCM_NO_BROWSER%"=="1" start "" "%CHAT_URL%"
 call :disk_check
 
 REM ---- 1. Git: downloads the app and its updates ----

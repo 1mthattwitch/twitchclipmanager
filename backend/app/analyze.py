@@ -186,15 +186,23 @@ def run_pipeline(clip_id: str, provider_name: str | None = None, progress: Progr
     # 1. Download
     stage("downloading", 0.05, "Downloading clip")
     path = Path(clip["file_path"]) if clip.get("file_path") else None
+    downloaded_now = False
     if not path or not path.exists():
         path = media.download(clip, clip["streamer_login"])
+        downloaded_now = True
         db.update("clips", "id", clip_id, file_path=str(path))
 
     # 2. Frames + transcript
     stage("transcribing", 0.25, "Extracting frames")
-    frames = media.extract_frames(path, clip_id, s.frames_per_clip, clip.get("duration") or 0)
-    progress(0.35, "Transcribing speech")
-    segments = transcribe.transcribe(path)
+    try:
+        frames = media.extract_frames(path, clip_id, s.frames_per_clip, clip.get("duration") or 0)
+        progress(0.35, "Transcribing speech")
+        segments = transcribe.transcribe(path)
+    finally:
+        if downloaded_now and not s.keep_videos:
+            # Sorting only needs the frames and transcript; don't fill the disk with videos.
+            path.unlink(missing_ok=True)
+            db.update("clips", "id", clip_id, file_path=None)
     if segments is None:
         progress(0.45, transcribe.last_error() or "No transcript; using frames only")
     db.update("clips", "id", clip_id, frames=frames, transcript=segments,

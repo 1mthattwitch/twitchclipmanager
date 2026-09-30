@@ -1,15 +1,21 @@
-import { api, type Job } from "../api";
+import { useEffect } from "react";
+import { api, fmtDuration, type Job, type QueueInfo } from "../api";
 import { Button, Empty, Icon, LargeTitle, ProgressRing, Spinner, useToast } from "../components/ui";
 
 const KIND_LABEL = { sync: "Fetching clips", analyze: "Watching clip", verify: "Double-checking" } as const;
 
-export function QueuePage({ jobs, counts, reload, onOpen }: {
+export function QueuePage({ jobs, counts, info, reload, onOpen, onFix }: {
   jobs: Job[];
   counts: Record<string, number>;
+  info: QueueInfo;
   reload: () => void;
   onOpen: (clipId: string) => void;
+  onFix: () => void;
 }) {
   const toast = useToast();
+  useEffect(() => {
+    reload(); // fresh numbers as soon as the tab opens
+  }, [reload]);
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
       await fn();
@@ -23,9 +29,32 @@ export function QueuePage({ jobs, counts, reload, onOpen }: {
   const queued = jobs.filter((j) => j.status === "queued");
   const finished = jobs.filter((j) => !["running", "queued"].includes(j.status));
 
+  const paused = info.paused;
+  const subtitle = paused
+    ? `Paused · ${(counts.queued ?? 0).toLocaleString()} waiting`
+    : `${counts.running ?? 0} running · ${(counts.queued ?? 0).toLocaleString()} waiting${info.eta_seconds ? ` · ${fmtDuration(info.eta_seconds)} left` : ""}`;
+
   return (
     <div className="mx-auto max-w-2xl px-4 pb-32 sm:px-6">
-      <LargeTitle title="Queue" subtitle={`${counts.running ?? 0} running · ${counts.queued ?? 0} waiting · ${counts.error ?? 0} failed`} />
+      <LargeTitle title="Queue" subtitle={subtitle} />
+
+      {paused && (
+        <div role="alert" className="mb-4 rounded-[14px] p-3.5" style={{ background: "color-mix(in srgb, var(--red) 14%, transparent)" }}>
+          <div className="text-[15px] font-semibold" style={{ color: "var(--red)" }}>
+            {paused.auto ? "Analysis paused: the same problem kept happening" : "Analysis paused"}
+          </div>
+          {paused.auto && <div className="mt-1 text-[14px] text-label">{paused.reason}</div>}
+          <div className="mt-1 text-[13px] text-label2">
+            {paused.auto
+              ? "Waiting clips are kept. Fix the problem, then press Resume."
+              : "Waiting clips are kept. Nothing new is analysed until you resume."}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {paused.auto && <Button kind="gray" onClick={onFix}>Fix it: open setup</Button>}
+            <Button onClick={() => act(() => api.post("/api/jobs/resume"), "Resumed")}>Resume</Button>
+          </div>
+        </div>
+      )}
 
       <div className="mb-6 grid grid-cols-3 gap-2">
         <Stat label="Waiting" value={counts.queued ?? 0} />
@@ -33,7 +62,22 @@ export function QueuePage({ jobs, counts, reload, onOpen }: {
         <Stat label="Failed" value={counts.error ?? 0} color={counts.error ? "var(--red)" : undefined} />
       </div>
 
+      {!!info.error_groups.length && (
+        <section className="mb-6" aria-label="Why clips failed">
+          <h3 className="mb-1.5 px-4 text-[13px] uppercase tracking-wide text-label2">Why clips failed</h3>
+          <ul className="overflow-hidden rounded-[14px] bg-bg2">
+            {info.error_groups.map((g, i, arr) => (
+              <li key={g.reason} className={`flex items-start gap-3 px-3 py-2.5 text-[14px] ${i < arr.length - 1 ? "hairline" : ""}`}>
+                <span className="shrink-0 font-semibold tabular-nums" style={{ color: "var(--red)" }}>{g.count.toLocaleString()}×</span>
+                <span className="min-w-0 break-words text-label">{g.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="mb-6 flex flex-wrap gap-2">
+        {!paused && !!counts.queued && <Button kind="gray" onClick={() => act(() => api.post("/api/jobs/pause"), "Paused")}>Pause</Button>}
         {!!counts.queued && <Button kind="gray" onClick={() => act(() => api.post("/api/jobs/cancel-queued"), "Stopped waiting jobs")}>Stop waiting jobs</Button>}
         {!!counts.error && <Button onClick={() => act(() => api.post("/api/jobs/retry-failed"), "Retrying failed clips")}><Icon name="refresh" size={18} /> Retry failed</Button>}
         {!!finished.length && <Button kind="gray" onClick={() => act(() => api.post("/api/jobs/clear-finished"), "Cleared")}>Clear finished</Button>}

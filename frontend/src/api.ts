@@ -26,6 +26,21 @@ export type QA = {
   created_at: number;
 };
 
+export type QueueInfo = {
+  paused: { reason: string; at: number; auto: boolean } | null;
+  error_groups: { reason: string; count: number }[];
+  eta_seconds: number | null;
+};
+
+export function fmtDuration(sec: number) {
+  if (sec < 90) return "about a minute";
+  const min = Math.round(sec / 60);
+  if (min < 90) return `about ${min} minutes`;
+  const h = Math.round(sec / 3600);
+  if (h < 48) return `about ${h} hours`;
+  return `about ${Math.round(sec / 86400)} days`;
+}
+
 export type Job = {
   id: number;
   kind: "sync" | "analyze" | "verify";

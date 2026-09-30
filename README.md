@@ -19,9 +19,11 @@ Add any streamer and the app pulls **every** public clip. An AI then *watches* e
 - **Search by meaning.** Keyword search (with a built-in streamer-slang thesaurus) is combined with meaning search from a small local model. Results jump to the matching moment.
 - **Offline or online.** *Local* uses a vision model on your graphics card via Ollama: free, private, no internet needed after setup. *Claude* is online and more accurate. You can also keep Local and have Claude **cross-check** only the clips the local AI was unsure about.
 - **DaVinci Resolve Studio.** One click imports clips into bins (`Twitch Clips / Streamer / Category`). The summary goes into Comments, tags into Keywords, the title into Description, and each moment becomes a colour-coded marker. Optionally the clip is appended to your timeline, trimmed to the suggested cut.
-- **iPhone-style interface.** Dark/light mode, frosted bars, bottom sheets, and hover-to-preview. Drag a card straight into Resolve or Explorer.
+- **iPhone-style interface.** Dark/light mode, frosted bars, bottom sheets, and hover-to-preview for downloaded clips. Drag a downloaded card straight into Resolve or Explorer.
 
 ## Setup (Windows)
+
+There are two files: **`install.bat`** (run once; running it again repairs and updates) and **`ClipManager.bat`** (daily start, also the desktop icon). Both check GitHub for updates, and both open the **Claude chat** this app was built in, next to the app, so you can ask for fixes or changes. Turn that off in **Settings → Open the chat when Clip Manager starts**.
 
 **Install. Pick one of these three ways:**
 
@@ -72,7 +74,14 @@ Whisper (speech) and the vision model can each have their own GPU. In Settings, 
 - **Direct:** in Resolve go to *Preferences → System → General → External scripting using* and choose **Local**. Then use **To Resolve** on a clip, or select several and press **To Resolve**. A project must be open.
 - **From inside Resolve:** the installer, or the setup wizard's *Install script* button, adds a **Clip Manager** entry to Resolve's *Workspace → Scripts* menu. Press **Queue for Resolve** in the app, then run that script in Resolve.
 
-Clips are only downloaded once they've been analysed. Downloaded files live in `library/<streamer>/`, and you can change that folder in Settings.
+**Videos aren't kept.** To sort clips, the app downloads each one only while the AI watches it (a few seconds), then deletes it. The summary, tags, a few still frames and the transcript are kept, which is all search needs. So thousands of clips take up little space. A clip is downloaded again when you send it to Resolve or press **Download** on it; those files live in `library/<streamer>/` (the folder can be changed in Settings). To keep every analysed video, turn on **Settings → Keep videos after analysis**.
+
+### The queue
+
+- Clips are analysed one at a time, most-viewed first. The Queue page shows roughly how long the rest will take. Press **Pause** to stop, and **Resume** to carry on. Waiting clips are always kept.
+- **When something is broken** (Ollama not running, Twitch downloads blocked…), 5 clips in a row fail with the same reason and the queue **pauses itself**, instead of failing every waiting clip. A red banner says why, with *Fix it* and *Resume*. The **Why clips failed** list groups failures by reason.
+- **Downloads.** The app uses yt-dlp, and if that fails, it downloads the clip directly the way Twitch's own website does. yt-dlp is updated at most once a day on start. A deleted clip just fails on its own and doesn't pause anything.
+- **Retry failed** puts failed clips back in the queue and resumes it.
 
 ## How accurate is it? Measuring the error rate
 
@@ -103,9 +112,12 @@ Iterating toward zero errors: run `spotcheck`, change one thing, and repeat. Thi
 | Frame extraction | Real FFmpeg on a generated 12 s video | Frames at the expected timestamps |
 | Windows install & updates | 16 scenarios, 46 checks: fresh install from a lone install.bat, updates (including ones that rewrite the running launcher), offline, edited files, repair, ZIP adoption, a failing install, a crash, switching to `main` | All pass; failures produce a problem report naming the step, with the pip error in the log |
 | Existing Ollama models | Fake L: and J: drives laid out like the real ones, next to image-generation models, on Windows Python | Finds both stores, uses the one with a vision model, prefers L: when both have it, sets `OLLAMA_MODELS`, skips the 6 GB download, and leaves other folders untouched |
+| Clip downloads | Fake Twitch playback API: yt-dlp failing, deleted clip, blocked video server, several qualities | Falls back to Twitch's own playback API, picks the best quality, clear per-clip error for deleted clips, no partial files left |
+| Queue under a broken setup | 5 identical failures; mixed failures; deleted clips; pause, resume and retry endpoints; paused banner in the browser | Pauses on the 5th identical failure only, waiting clips stay queued, retry resumes |
+| Disk use | Pipeline with the default settings | The video is deleted after analysis; it is downloaded again for Resolve or **Download** |
 | Setup wizard | Playwright through every step with fake Twitch, Claude and Ollama | Wrong keys explained, model folder chosen, Ollama restarted, Resolve script installed, settings saved |
 
-Not tested in the development sandbox (it couldn't reach Twitch, Hugging Face or a GPU): live Twitch downloads, Whisper/Ollama on CUDA, the meaning-search model, and a live Resolve import. The Resolve code is tested against a faithful fake of Resolve's API. Use the `evaluate` commands above for the real-footage numbers.
+Not tested in the development sandbox (it couldn't reach Twitch, Hugging Face or a GPU): live Twitch downloads (both methods are tested against fakes), Whisper/Ollama on CUDA, the meaning-search model, and a live Resolve import. The Resolve code is tested against a faithful fake of Resolve's API. Use the `evaluate` commands above for the real-footage numbers.
 
 Run the tests yourself:
 

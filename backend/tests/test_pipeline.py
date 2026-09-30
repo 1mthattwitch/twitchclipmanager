@@ -48,7 +48,7 @@ def test_full_pipeline_with_stub(monkeypatch, tmp_path):
     assert clip["tags"] == ["boss", "death"]
     assert clip["needs_review"] == 0
     assert clip["transcript_text"] == "NO WAY"
-    assert clip["file_path"] == str(video)
+    assert clip["file_path"] is None and not video.exists()  # video not kept after analysis
     checks = db.query("SELECT * FROM qa WHERE clip_id='c1' AND kind='verify'")
     assert checks[0]["supported"] == 1
     assert stub.calls == [("json", 1), ("json", 1)]

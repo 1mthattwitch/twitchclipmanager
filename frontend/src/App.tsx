@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
-import { api, type Job, type Settings, type Status, type Streamer } from "./api";
+import { api, type Job, type QueueInfo, type Settings, type Status, type Streamer } from "./api";
 import { ClipSheet } from "./components/ClipSheet";
 import { Icon, ToastProvider } from "./components/ui";
 import { ClipsPage } from "./pages/ClipsPage";
@@ -32,6 +32,7 @@ export default function App() {
   const [streamers, setStreamers] = useState<Streamer[] | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  const [queueInfo, setQueueInfo] = useState<QueueInfo>({ paused: null, error_groups: [], eta_seconds: null });
   const [status, setStatus] = useState<Status | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [theme, setThemeState] = useState(readTheme);
@@ -52,9 +53,10 @@ export default function App() {
 
   const loadStreamers = useCallback(() => api.get<Streamer[]>("/api/streamers").then(setStreamers).catch(() => setStreamers([])), []);
   const loadJobs = useCallback(
-    () => api.get<{ jobs: Job[]; counts: Record<string, number> }>("/api/jobs").then((r) => {
+    () => api.get<{ jobs: Job[]; counts: Record<string, number> } & QueueInfo>("/api/jobs").then((r) => {
       setJobs(r.jobs);
       setCounts(r.counts);
+      setQueueInfo({ paused: r.paused ?? null, error_groups: r.error_groups ?? [], eta_seconds: r.eta_seconds ?? null });
     }).catch(() => {}),
     [],
   );
@@ -139,7 +141,7 @@ export default function App() {
                   goTo={setTab}
                 />
               )}
-              {tab === "queue" && <QueuePage jobs={jobs} counts={counts} reload={loadJobs} onOpen={setOpenClip} />}
+              {tab === "queue" && <QueuePage jobs={jobs} counts={counts} info={queueInfo} reload={loadJobs} onOpen={setOpenClip} onFix={() => setSetup(1)} />}
               {tab === "settings" && <SettingsPage theme={theme} setTheme={setTheme} onSaved={() => api.get<Status>("/api/status").then(setStatus)} onRunSetup={(step) => setSetup(step)} />}
             </motion.div>
           </AnimatePresence>

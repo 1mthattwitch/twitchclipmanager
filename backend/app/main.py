@@ -264,12 +264,22 @@ def ask(clip_id: str, body: dict = Body(...)):
         _bad(e)
 
 
+def _ensure_file(clip: dict) -> dict:
+    """Videos aren't kept after analysis by default: fetch one again when it's needed."""
+    if clip.get("file_path") and Path(clip["file_path"]).exists():
+        return clip
+    try:
+        path = media.download(clip, clip["streamer_login"])
+    except media.MediaError as e:
+        _bad(e)
+    db.update("clips", "id", clip["id"], file_path=str(path))
+    return {**clip, "file_path": str(path)}
+
+
 @app.post("/api/clips/{clip_id}/reveal")
 def reveal(clip_id: str):
-    clip = _clip_or_404(clip_id)
-    path = clip.get("file_path")
-    if not path or not Path(path).exists():
-        _bad(ValueError("Clip isn't downloaded yet"))
+    clip = _ensure_file(_clip_or_404(clip_id))
+    path = clip["file_path"]
     if sys.platform.startswith("win"):
         subprocess.Popen(["explorer", "/select,", path])
     elif sys.platform == "darwin":
@@ -293,7 +303,21 @@ def jobs(limit: int = 100):
                     CASE WHEN j.status IN ('queued') THEN j.created_at END ASC,
                     j.updated_at DESC
            LIMIT ?""", [limit])
-    return {"counts": counts, "jobs": rows}
+    waiting = db.query_one("SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND kind='analyze'")["n"]
+    return {"counts": counts, "jobs": rows, "paused": worker.paused() or None,
+            "error_groups": worker.error_groups(), "eta_seconds": worker.estimate_seconds(waiting)}
+
+
+@app.post("/api/jobs/pause")
+def pause_jobs():
+    worker.pause()
+    return {"ok": True}
+
+
+@app.post("/api/jobs/resume")
+def resume_jobs():
+    worker.resume()
+    return {"ok": True}
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -313,6 +337,7 @@ def retry_failed():
     for cid in ids:
         worker.enqueue_analyze(cid)
     db.execute("DELETE FROM jobs WHERE status = 'error'")
+    worker.resume()
     return {"queued": len(ids)}
 
 
@@ -340,6 +365,7 @@ def resolve_send(body: dict = Body(...)):
     clips = [_clip_or_404(cid) for cid in body.get("ids") or []]
     try:
         res = resolve_bridge.get_resolve()
+        clips = [_ensure_file(c) for c in clips]
         return resolve_bridge.push_clips(res, [_resolve_item(c) for c in clips],
                                          config.get_settings().resolve_bin_root, bool(body.get("append")))
     except resolve_bridge.ResolveError as e:
@@ -353,18 +379,35 @@ def resolve_queue_add(body: dict = Body(...)):
         _clip_or_404(cid)
         db.execute("INSERT INTO resolve_queue (clip_id, append_to_timeline, created_at) VALUES (?,?,?)",
                    [cid, int(bool(body.get("append"))), db.now()])
+    # Videos aren't kept after analysis by default; fetch them now so Resolve's script
+    # finds them ready.
+    threading.Thread(target=_fetch_files, args=(list(ids),), daemon=True).start()
     return {"queued": len(ids)}
+
+
+def _fetch_files(ids: list[str]) -> None:
+    for cid in ids:
+        clip = analyze.get_clip(cid)
+        if not clip:
+            continue
+        try:
+            _ensure_file(clip)
+        except Exception as e:
+            logging.getLogger(__name__).warning("Couldn't download %s for Resolve: %s", cid, getattr(e, "detail", e))
 
 
 @app.get("/api/resolve/queue")
 def resolve_queue():
     rows = db.query("SELECT * FROM resolve_queue WHERE sent_at IS NULL ORDER BY id")
-    items = []
+    items, waiting = [], 0
     for r in rows:
         clip = analyze.get_clip(r["clip_id"])
+        if clip and not (clip.get("file_path") and Path(clip["file_path"]).exists()):
+            waiting += 1  # still downloading; picked up on the next run
+            continue
         if clip:
             items.append(_resolve_item(clip, bool(r["append_to_timeline"]), r["id"]))
-    return {"items": items, "bin_root": config.get_settings().resolve_bin_root}
+    return {"items": items, "waiting": waiting, "bin_root": config.get_settings().resolve_bin_root}
 
 
 @app.post("/api/resolve/queue/ack")

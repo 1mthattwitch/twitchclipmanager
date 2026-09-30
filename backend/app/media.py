@@ -30,30 +30,129 @@ def frames_dir(clip_id: str) -> Path:
     return config.DATA_DIR / "frames" / re.sub(r"[^\w-]", "_", clip_id)
 
 
-def download(clip: dict, streamer_login: str) -> Path:
-    target = clip_path(clip, streamer_login)
-    if target.exists() and target.stat().st_size > 0:
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import yt_dlp
-    except ImportError as e:  # pragma: no cover
-        raise MediaError("yt-dlp is not installed (pip install yt-dlp)") from e
+class ClipGone(MediaError):
+    """The clip was deleted on Twitch: a per-clip problem, not a broken setup."""
+
+
+# Twitch's own website uses this public Client-ID and query for clip playback.
+TWITCH_WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+CLIP_TOKEN_QUERY = {
+    "operationName": "VideoAccessToken_Clip",
+    "extensions": {"persistedQuery": {"version": 1,
+                                      "sha256Hash": "36b89d2507fce29e5ca551df756d27c1cfe079e2609642b4390aa4c35796eb11"}},
+}
+_upgrade_started = False
+
+
+def _first_line(e: Exception) -> str:
+    text = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+    return re.sub(r"^ERROR:\s*", "", text)[:300]
+
+
+def _download_ytdlp(clip: dict, target: Path) -> None:
+    import yt_dlp
     opts = {
-        "outtmpl": str(target),
+        "outtmpl": {"default": str(target).replace("%", "%%")},
         "format": "best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "retries": 3,
+        "logger": _QuietLogger(),
     }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([clip["url"]])
+
+
+class _QuietLogger:
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+
+
+def _download_direct(clip: dict, target: Path, http=None) -> None:
+    """Fetch the clip the way Twitch's website does: playback token + signed MP4 URL."""
+    import httpx
+    from urllib.parse import urlencode
+    if http is None:
+        with httpx.Client(timeout=60, follow_redirects=True) as own:
+            return _download_direct(clip, target, http=own)
+    client = http
+    body = [dict(CLIP_TOKEN_QUERY, variables={"slug": clip["id"]})]
+    r = client.post("https://gql.twitch.tv/gql", json=body, headers={"Client-ID": TWITCH_WEB_CLIENT_ID})
+    if r.status_code != 200:
+        raise MediaError(f"Twitch answered {r.status_code}")
+    data = r.json()
+    data = data[0] if isinstance(data, list) else data
+    if data.get("errors"):
+        raise MediaError(f"Twitch said: {data['errors'][0].get('message', 'error')}")
+    info = (data.get("data") or {}).get("clip")
+    if not info:
+        raise ClipGone("This clip was deleted or made private on Twitch")
+    token = info.get("playbackAccessToken") or {}
+    qualities = [q for q in info.get("videoQualities") or [] if q.get("sourceURL")]
+    if not qualities or not token.get("signature"):
+        raise MediaError("Twitch didn't return a playable video for this clip")
+    best = max(qualities, key=lambda q: (int(re.sub(r"\D", "", str(q.get("quality") or 0)) or 0),
+                                         float(q.get("frameRate") or 0)))
+    sep = "&" if "?" in best["sourceURL"] else "?"
+    url = best["sourceURL"] + sep + urlencode({"sig": token["signature"], "token": token["value"]})
+    part = target.with_suffix(".mp4.part")
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([clip["url"]])
+        with client.stream("GET", url) as resp:
+            if resp.status_code != 200:
+                raise MediaError(f"The video server answered {resp.status_code}")
+            with part.open("wb") as f:
+                for chunk in resp.iter_bytes(1 << 16):
+                    f.write(chunk)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    if part.stat().st_size < 1024:
+        part.unlink(missing_ok=True)
+        raise MediaError("The downloaded video was empty")
+    part.replace(target)
+
+
+def _upgrade_ytdlp_in_background() -> None:
+    """Twitch changes break old yt-dlp versions; fetch the newest one for next time."""
+    global _upgrade_started
+    if _upgrade_started:
+        return
+    _upgrade_started = True
+    import sys
+    import threading
+
+    def run():
+        subprocess.run([sys.executable, "-m", "pip", "install", "-U", "--quiet", "yt-dlp"],
+                       capture_output=True, timeout=600)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def download(clip: dict, streamer_login: str, http=None) -> Path:
+    """yt-dlp first; if that fails, Twitch's own playback API directly."""
+    target = clip_path(clip, streamer_login)
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    first = None
+    try:
+        _download_ytdlp(clip, target)
+    except ImportError:
+        first = "yt-dlp is not installed"
+    except Exception as e:  # yt-dlp raises many types
+        first = _first_line(e)
+        _upgrade_ytdlp_in_background()
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    try:
+        _download_direct(clip, target, http=http)
+    except ClipGone:
+        raise
     except Exception as e:
-        raise MediaError(f"Download failed: {e}") from e
-    if not target.exists():
-        raise MediaError("Download finished but no file was written.")
+        Path(str(target) + ".part").unlink(missing_ok=True)  # yt-dlp's leftover
+        raise MediaError(f"Download failed. yt-dlp: {first or 'no file written'}. Direct: {_first_line(e)}") from e
     return target
 
 

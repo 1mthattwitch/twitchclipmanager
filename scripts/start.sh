@@ -20,6 +20,12 @@ if [ ! -x .venv/bin/python ] || ! .venv/bin/python -c 'import sys' 2>/dev/null \
   .venv/bin/python -m pip install -r backend/requirements.txt --disable-pip-version-check
   echo "$REQHASH" > .venv/install-ok
 fi
+# Twitch site changes break old yt-dlp versions: fetch the newest at most once a day.
+TODAY=$(date +%F)
+if [ "$(cat .venv/ytdlp-updated 2>/dev/null)" != "$TODAY" ]; then
+  .venv/bin/python -m pip install -U yt-dlp --quiet --disable-pip-version-check --timeout 10 --retries 1 >/dev/null 2>&1 \
+    && echo "$TODAY" > .venv/ytdlp-updated || true
+fi
 [ "$CM_NO_LAUNCH" = "1" ] && exit 0
 cd backend
 exec ../.venv/bin/python -m app

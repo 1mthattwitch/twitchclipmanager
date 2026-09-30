@@ -57,7 +57,10 @@ def main():
 
     queue = json.loads(fetch("/api/resolve/queue"))
     if not queue["items"]:
-        print("Nothing queued. Press 'Queue for Resolve' on clips in the app first.")
+        if queue.get("waiting"):
+            print("%d clip(s) are still downloading. Run this again in a moment." % queue["waiting"])
+        else:
+            print("Nothing queued. Press 'Queue for Resolve' on clips in the app first.")
         return
     res = connect_resolve()
     if res is None:

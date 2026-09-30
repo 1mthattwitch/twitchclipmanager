@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["TCM_NO_WORKER"] = "1"
 
-from app import config, db, embed, search  # noqa: E402
+from app import config, db, embed, media, search  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +22,8 @@ def fresh_data(tmp_path, monkeypatch):
     search.invalidate_cache()
     # No model downloads in tests: embeddings are off unless a test fakes them.
     monkeypatch.setattr(embed, "embed", lambda texts, query=False: None)
+    # Never pip-upgrade yt-dlp from a test.
+    monkeypatch.setattr(media, "_upgrade_ytdlp_in_background", lambda: None)
     yield
     db.reset_for_tests()
 

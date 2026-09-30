@@ -216,3 +216,16 @@ def test_mobile_layout(server):
         shot(pg, "09-mobile-sheet")
         browser.close()
         assert not errors, errors
+
+
+def test_paused_queue_banner_and_resume(page, server):
+    import httpx
+    pg = page
+    httpx.post(server + "/api/jobs/pause", headers={"X-Clip-Manager": "1"}).raise_for_status()
+    pg.get_by_role("button", name="Queue").first.click()
+    banner = pg.get_by_role("alert")
+    expect(banner).to_contain_text("Analysis paused")
+    expect(banner).to_contain_text("Waiting clips are kept")
+    banner.get_by_role("button", name="Resume").click()
+    expect(pg.get_by_role("alert")).to_have_count(0)
+    assert httpx.get(server + "/api/jobs").json()["paused"] is None

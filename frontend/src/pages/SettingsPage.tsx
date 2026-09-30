@@ -79,7 +79,11 @@ export function SettingsPage({ theme, setTheme, onSaved, onRunSetup }: { theme: 
       <Group title="Setup & help" footer="If something isn't working, press Copy diagnostics and paste the result into your message when asking for help. Keys and passwords are never included.">
         <Row label="Run the setup wizard" detail="Twitch keys, AI, model folder, Resolve" onClick={() => onRunSetup(1)}><span className="text-label3">›</span></Row>
         <Row label="Offline AI model folder" detail={String(v.ollama_models_dir || "chosen automatically")} onClick={() => onRunSetup(2)}><span className="text-label3">›</span></Row>
-        <Row label="Copy diagnostics" onClick={copyDiagnostics} last><span className="text-accent text-[15px]">Copy</span></Row>
+        <Row label="Copy diagnostics" onClick={copyDiagnostics}><span className="text-accent text-[15px]">Copy</span></Row>
+        <Row label="Open Claude chat" detail="Ask for fixes or new features" onClick={() => window.open(String(v.help_chat_url), "_blank", "noopener")}><span className="text-accent text-[15px]">Open</span></Row>
+        <Row label="Open the chat when Clip Manager starts" last>
+          <Toggle checked={!!v.open_chat_on_start} onChange={(b) => set("open_chat_on_start", b)} label="Open chat on start" />
+        </Row>
       </Group>
 
       <Group title="Appearance">
@@ -153,6 +157,9 @@ export function SettingsPage({ theme, setTheme, onSaved, onRunSetup }: { theme: 
         <Row label="Re-check unsure clips when idle"><Toggle checked={!!v.background_recheck} onChange={(b) => set("background_recheck", b)} label="Background recheck" /></Row>
         <Row label="Frames per clip" detail="More = better understanding, slower">{text("frames_per_clip", "6", "number")}</Row>
         <Row label="Flag for review below" detail="Confidence 0–1">{text("review_threshold", "0.6", "number")}</Row>
+        <Row label="Keep videos after analysis" detail="Off: only the AI's notes are kept. Videos download when you send them to Resolve">
+          <Toggle checked={!!v.keep_videos} onChange={(b) => set("keep_videos", b)} label="Keep videos" />
+        </Row>
         <Row label="Clip folder" detail="Where downloaded clips are saved" last>{text("library_dir")}</Row>
       </Group>
 

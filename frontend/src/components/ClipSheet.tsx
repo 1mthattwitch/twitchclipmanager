@@ -242,14 +242,14 @@ function ClipDetail({ clipId, categories, onClose, onChanged }: { clipId: string
               <Icon name="edit" size={18} /> Correct
             </Button>
           )}
-          <Button kind="gray" busy={busy === "resolve"} disabled={!clip.has_file} onClick={() => run("resolve", async () => {
+          <Button kind="gray" busy={busy === "resolve"} onClick={() => run("resolve", async () => {
             const r = await api.post<{ imported: number; already_there: number; errors: string[] }>("/api/resolve/send", { ids: [clip.id] });
             if (r.errors.length) throw new Error(r.errors.join("; "));
-          }, "Sent to Resolve")} title={clip.has_file ? "Import into the open Resolve project" : "Analyse first to download the clip"}>
+          }, "Sent to Resolve")} title={clip.has_file ? "Import into the open Resolve project" : "Downloads the clip, then imports it into the open Resolve project"}>
             <Icon name="send" size={18} /> To Resolve
           </Button>
-          <Button kind="gray" disabled={!clip.has_file} onClick={() => run("reveal", () => api.post(`/api/clips/${id}/reveal`))}>
-            <Icon name="folder" size={18} /> Show file
+          <Button kind="gray" busy={busy === "reveal"} onClick={() => run("reveal", () => api.post(`/api/clips/${id}/reveal`))} title={clip.has_file ? "Show the video file" : "Download the video and show it in its folder"}>
+            <Icon name="folder" size={18} /> {clip.has_file ? "Show file" : "Download"}
           </Button>
           <Button kind="gray" onClick={() => window.open(clip.url, "_blank")}>
             <Icon name="external" size={18} /> Twitch
