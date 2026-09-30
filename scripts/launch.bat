@@ -14,6 +14,13 @@ start "" http://localhost:8765
 exit /b 0
 :not_running
 
+REM A Git that install.bat downloaded privately, or one installed a moment ago.
+if exist "%LOCALAPPDATA%\ClipManager\tools\git\cmd\git.exe" set "PATH=%LOCALAPPDATA%\ClipManager\tools\git\cmd;%PATH%"
+if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+
+REM install.bat can't replace itself while it runs; bring it up to date now that it isn't.
+if exist ".git" git checkout --quiet -- install.bat >nul 2>nul
+
 REM The updater also runs from a temp copy, so no file in the app folder is in use
 REM while the update replaces files.
 if /i "%~2"=="--no-update" goto :updated

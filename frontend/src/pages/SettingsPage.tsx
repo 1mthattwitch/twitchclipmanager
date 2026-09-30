@@ -17,7 +17,7 @@ function Dot({ ok }: { ok: boolean }) {
   return <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: ok ? "var(--green)" : "var(--orange)" }} />;
 }
 
-export function SettingsPage({ theme, setTheme, onSaved }: { theme: string; setTheme: (t: string) => void; onSaved: () => void }) {
+export function SettingsPage({ theme, setTheme, onSaved, onRunSetup }: { theme: string; setTheme: (t: string) => void; onSaved: () => void; onRunSetup: (step: number) => void }) {
   const toast = useToast();
   const [s, setS] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -48,6 +48,25 @@ export function SettingsPage({ theme, setTheme, onSaved }: { theme: string; setT
       setSaving(false);
     }
   };
+  const copyDiagnostics = async () => {
+    try {
+      const report = await (await fetch("/api/diagnostics")).text();
+      try {
+        await navigator.clipboard.writeText(report);
+      } catch {
+        // Clipboard API blocked: fall back to a hidden textarea.
+        const ta = document.createElement("textarea");
+        ta.value = report;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      toast("Diagnostics copied. Paste them into your message.");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
   const text = (k: string, placeholder = "", type = "text") => (
     <TextInput type={type} value={String(v[k] ?? "")} placeholder={placeholder} onChange={(e) => set(k, type === "number" ? Number(e.target.value) : e.target.value)} aria-label={k} />
   );
@@ -56,6 +75,12 @@ export function SettingsPage({ theme, setTheme, onSaved }: { theme: string; setT
   return (
     <div className="mx-auto max-w-2xl px-4 pb-40 sm:px-6">
       <LargeTitle title="Settings" />
+
+      <Group title="Setup & help" footer="If something isn't working, press Copy diagnostics and paste the result into your message when asking for help. Keys and passwords are never included.">
+        <Row label="Run the setup wizard" detail="Twitch keys, AI, model folder, Resolve" onClick={() => onRunSetup(1)}><span className="text-label3">›</span></Row>
+        <Row label="Offline AI model folder" detail={String(v.ollama_models_dir || "chosen automatically")} onClick={() => onRunSetup(2)}><span className="text-label3">›</span></Row>
+        <Row label="Copy diagnostics" onClick={copyDiagnostics} last><span className="text-accent text-[15px]">Copy</span></Row>
+      </Group>
 
       <Group title="Appearance">
         <div className="p-3"><Segmented value={theme} onChange={setTheme} options={[{ value: "system", label: "Auto" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} /></div>

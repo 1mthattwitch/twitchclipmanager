@@ -33,17 +33,20 @@ if errorlevel 1 rmdir /s /q ".venv"
 :venv_checked
 if exist ".venv\Scripts\python.exe" if defined REQHASH if "%OLDHASH%"=="%REQHASH%" exit /b 0
 
+REM Under install.bat, pip's long output goes to the install log instead of the screen.
+set "OUT=con"
+if defined LOG set "OUT=%LOG%"
 echo.
 echo Installing components. The first time takes a few minutes...
 if not exist ".venv\Scripts\python.exe" (
-  %PY% -m venv .venv
+  %PY% -m venv .venv >>"%OUT%" 2>&1
   if errorlevel 1 goto :failed
 )
-".venv\Scripts\python.exe" -m pip install --upgrade pip --quiet --disable-pip-version-check
-".venv\Scripts\python.exe" -m pip install -r backend\requirements.txt --disable-pip-version-check
+".venv\Scripts\python.exe" -m pip install --upgrade pip --quiet --disable-pip-version-check >>"%OUT%" 2>&1
+".venv\Scripts\python.exe" -m pip install -r backend\requirements.txt --disable-pip-version-check >>"%OUT%" 2>&1
 if errorlevel 1 goto :failed
 REM NVIDIA libraries for speech-to-text on the graphics card. Optional: without them it uses the CPU.
-".venv\Scripts\python.exe" -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*" --quiet --disable-pip-version-check
+".venv\Scripts\python.exe" -m pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*" --quiet --disable-pip-version-check >>"%OUT%" 2>&1
 if errorlevel 1 echo GPU speech libraries didn't install; speech-to-text will use the CPU instead.
 >".venv\install-ok" echo %REQHASH%
 echo Components ready.
@@ -52,6 +55,10 @@ exit /b 0
 :failed
 echo.
 echo Installing components failed. Check your internet connection and try again.
+if not defined LOG goto :failed_end
+echo Last lines of the log:
+powershell -NoProfile -Command "Get-Content -Tail 25 -LiteralPath $env:LOG" 2>nul
+:failed_end
 echo If it keeps failing, copy the red text above and ask for help.
 exit /b 1
 

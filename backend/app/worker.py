@@ -7,6 +7,7 @@ over VRAM.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import traceback
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from . import analyze, config, db
 from .twitch import CLIPS_EPOCH, TwitchClient, iso, parse_iso
 
+log = logging.getLogger(__name__)
 LANES = {"net": ("sync",), "gpu": ("analyze", "verify")}
 IDLE_SLEEP = 2.0
 RECHECK_EVERY = 24 * 3600
@@ -231,7 +233,7 @@ def _loop(lane: str) -> None:
                     db.update("clips", "id", job["clip_id"], status="queued")
                 _stop.wait(RETRY_DELAY * attempts)
             else:
-                traceback.print_exc()
+                log.exception("Job %s (%s) failed", job["id"], job["kind"])
                 db.update("jobs", "id", job["id"], status="error", message=str(e)[:500], updated_at=db.now())
         idle_since = time.time()
 

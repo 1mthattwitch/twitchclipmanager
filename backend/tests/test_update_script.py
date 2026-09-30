@@ -92,3 +92,24 @@ def test_diverged_copy_is_left_alone(repos):
 
 def test_no_git_folder(tmp_path):
     assert "Auto-update is off" in run(tmp_path)
+
+
+def test_switches_channel_after_merge(tmp_path):
+    remote, dev, app = tmp_path / "r.git", tmp_path / "dev", tmp_path / "app"
+    git(tmp_path, "init", "-q", "--bare", "-b", "feature", str(remote))
+    git(tmp_path, "clone", "-q", str(remote), str(dev))
+    (dev / "ClipManager.bat").write_text("stub\r\n")
+    git(dev, "add", "-A"); git(dev, "commit", "-qm", "app"); git(dev, "push", "-q", "origin", "HEAD:feature")
+    git(tmp_path, "clone", "-q", "-b", "feature", str(remote), str(app))
+    # main created at an older commit without the app: no switch
+    git(dev, "checkout", "-q", "--orphan", "old"); git(dev, "rm", "-rqf", ".")
+    (dev / "README").write_text("old\n"); git(dev, "add", "-A"); git(dev, "commit", "-qm", "old")
+    git(dev, "push", "-q", "origin", "HEAD:main")
+    run(app)
+    assert git(app, "rev-parse", "--abbrev-ref", "HEAD") == "feature"
+    # PR merged: main now contains the app and this version -> switch
+    git(dev, "checkout", "-q", "feature"); git(dev, "push", "-q", "-f", "origin", "HEAD:main")
+    out = run(app)
+    assert "Switched to the main update channel" in out
+    assert git(app, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git(app, "rev-parse", "--abbrev-ref", "main@{u}") == "origin/main"

@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
-import { api, type Job, type Status, type Streamer } from "./api";
+import { api, type Job, type Settings, type Status, type Streamer } from "./api";
 import { ClipSheet } from "./components/ClipSheet";
 import { Icon, ToastProvider } from "./components/ui";
 import { ClipsPage } from "./pages/ClipsPage";
 import { QueuePage } from "./pages/QueuePage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SetupWizard } from "./pages/SetupWizard";
 import { StreamersPage } from "./pages/StreamersPage";
 
 type Tab = "clips" | "streamers" | "queue" | "settings";
@@ -34,6 +35,7 @@ export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [theme, setThemeState] = useState(readTheme);
+  const [setup, setSetup] = useState<number | null>(null); // wizard step to open, or null
 
   const setTheme = (t: string) => {
     setThemeState(t);
@@ -56,6 +58,13 @@ export default function App() {
     }).catch(() => {}),
     [],
   );
+
+  // First run: open the setup wizard until it's been completed (or skipped).
+  useEffect(() => {
+    api.get<{ settings: Settings }>("/api/settings").then(({ settings }) => {
+      if (!settings.setup_complete) setSetup(0);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     loadStreamers();
@@ -131,7 +140,7 @@ export default function App() {
                 />
               )}
               {tab === "queue" && <QueuePage jobs={jobs} counts={counts} reload={loadJobs} onOpen={setOpenClip} />}
-              {tab === "settings" && <SettingsPage theme={theme} setTheme={setTheme} onSaved={() => api.get<Status>("/api/status").then(setStatus)} />}
+              {tab === "settings" && <SettingsPage theme={theme} setTheme={setTheme} onSaved={() => api.get<Status>("/api/status").then(setStatus)} onRunSetup={(step) => setSetup(step)} />}
             </motion.div>
           </AnimatePresence>
         </main>
@@ -146,6 +155,18 @@ export default function App() {
           ))}
         </nav>
 
+        {setup !== null && (
+          <SetupWizard
+            startAt={setup}
+            onDone={() => {
+              setSetup(null);
+              loadStreamers();
+              loadJobs();
+              api.get<Status>("/api/status").then(setStatus).catch(() => {});
+              setRefreshKey((k) => k + 1);
+            }}
+          />
+        )}
         <ClipSheet clipId={openClip} categories={CATEGORY_LIST} onClose={() => setOpenClip(null)} onChanged={() => setRefreshKey((k) => k + 1)} />
       </div>
     </ToastProvider>

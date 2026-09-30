@@ -11,6 +11,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parents[2]))
 sys.path.insert(0, str(HERE.parents[1]))
+sys.path.insert(0, str(HERE.parents[1]))  # tests/ for fixtures
 data_dir = Path(sys.argv[1])
 port = int(sys.argv[2])
 os.environ["TCM_DATA_DIR"] = str(data_dir)
@@ -51,8 +52,46 @@ class FakeAI(base.Provider):
 base.get_provider = lambda name=None: FakeAI()
 analyze.get_provider = base.get_provider
 
-config.save_settings({"library_dir": str(data_dir / "library"), "twitch_client_id": "demo",
-                      "twitch_client_secret": "demo", "background_recheck": False})
+WIZARD = os.environ.get("TCM_DEMO_WIZARD") == "1"
+config.save_settings({"library_dir": str(data_dir / "library"), "twitch_client_id": "" if WIZARD else "demo",
+                      "twitch_client_secret": "" if WIZARD else "demo", "background_recheck": False,
+                      "setup_complete": not WIZARD})
+
+if WIZARD:
+    # A fresh install: fake Twitch/Claude answers, two model folders like the user's, a fake Ollama.
+    import anthropic
+    import types
+    from app import twitch
+    from app.services import ollama_manager, resolve_setup
+    from test_ollama_setup import make_store
+    L = data_dir / "L" / ".DoNotTouch" / "models" / ".ollama"
+    J = data_dir / "J" / "ai" / "ollama_models"
+    make_store(L, {"llama3:8b": {"size": 4_700_000_000}}, nested="models")
+    make_store(J, {"qwen2.5vl:7b": {"size": 6_000_000_000}, "mistral:7b": {"size": 4_100_000_000}})
+    config.save_settings({"ollama_model_dirs": [str(L), str(J)]})
+    twitch.TwitchClient._get_token = lambda self: (_ for _ in ()).throw(
+        twitch.TwitchError("Twitch rejected the Client ID/Secret (400). Check Settings.")) if self.client_secret != "good-secret" else "tok"
+    twitch.TwitchClient.get_user = lambda self, login: {"id": "99", "login": login, "display_name": login.title(),
+                                                        "profile_image_url": None}
+    class _Models:
+        def __init__(self, key): self.key = key
+        def list(self, limit):
+            if self.key != "sk-ant-good":
+                import httpx
+                raise anthropic.AuthenticationError("bad", response=httpx.Response(401, request=httpx.Request("GET", "https://x")), body=None)
+            return []
+    anthropic.Anthropic = lambda **kw: types.SimpleNamespace(models=_Models(kw.get("api_key")))
+    state = {"running": {"llama3:8b"}}          # Ollama running with the wrong folder
+    ollama_manager.find_exe = lambda: "C:/fake/ollama.exe"
+    ollama_manager.running_models = lambda http=None: set(state["running"]) if state["running"] is not None else None
+    def _restart(store, http=None):
+        from app.services import ollama_stores
+        state["running"] = ollama_stores.store_model_names(store)
+        return True
+    ollama_manager.restart = _restart
+    ollama_manager.set_user_env = lambda name, value, **k: f"Set {name}={value} for your Windows user"
+    resolve_setup.scripts_dir = lambda: data_dir / "ResolveScripts"
+    resolve_setup.resolve_installed = lambda: True
 db.connect()
 ffmpeg = media.ffmpeg_exe()
 sid = db.execute("INSERT INTO streamers (twitch_id, login, display_name, created_at, synced_until) VALUES ('1','demo','DemoStreamer',0,'2025-06-01T00:00:00Z')").lastrowid

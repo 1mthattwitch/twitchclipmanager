@@ -23,24 +23,31 @@ Add any streamer and the app pulls **every** public clip. An AI then *watches* e
 
 ## Setup (Windows)
 
-**First time, one file does everything:**
+**Install. Pick one of these three ways:**
 
-1. Download **[install.bat](https://raw.githubusercontent.com/1mthattwitch/twitchclipmanager/claude/nifty-goodall-p83xy1/install.bat)** (right-click the link → *Save link as…*), then double-click it. If Windows shows “Windows protected your PC”, click *More info → Run anyway*.
-   - It installs Git and Python if you don't have them (using Windows' built-in `winget`).
-   - It downloads the app to `%USERPROFILE%\twitchclipmanager` and installs its components.
-   - It asks whether to install the **offline AI** (Ollama plus a ~6 GB model that fits an 8 GB card).
-   - It puts a **Clip Manager** icon on your desktop, then starts the app.
-2. **Get free Twitch keys** at [dev.twitch.tv/console](https://dev.twitch.tv/console/apps/create) → *Register Your Application*:
-   - Name: anything (e.g. `my-clip-manager`)
-   - OAuth Redirect URL: `http://localhost`
-   - Category: *Other* · Client type: *Confidential*
-   - Click *Manage* → copy the **Client ID**, then press **New Secret** and copy that too.
-3. *(Optional)* For the online AI, create a Claude API key at [console.anthropic.com](https://console.anthropic.com/settings/keys) and add some credit. Settings shows the estimated cost per clip for each model.
-4. In the app's **Settings**, paste the Twitch ID/secret (and the Claude key if you have one). In **Streamers**, add someone and choose how far back to fetch.
+- **Easiest:** open **PowerShell** (Start menu → type *PowerShell*), paste this line and press Enter:
+  ```powershell
+  irm https://raw.githubusercontent.com/1mthattwitch/twitchclipmanager/claude/nifty-goodall-p83xy1/install.bat -OutFile $env:TEMP\install.bat; & $env:TEMP\install.bat
+  ```
+- **Download the file:** right-click **[install.bat](https://raw.githubusercontent.com/1mthattwitch/twitchclipmanager/claude/nifty-goodall-p83xy1/install.bat)** → *Save link as…*. Check that the name ends in `.bat`, not `.txt`, then double-click it. If Windows shows “Windows protected your PC”, click *More info → Run anyway*.
+- **ZIP:** on GitHub click **Code → Download ZIP**, unzip it, and double-click `install.bat` inside. Your copy is linked to GitHub so it updates itself.
 
-**Every day:** double-click the **Clip Manager** desktop icon (it runs `ClipManager.bat` in the app folder).
+The installer:
+- installs Git and Python if you don't have them, using `winget`, or direct downloads if your PC doesn't have `winget`
+- downloads the app to `%USERPROFILE%\twitchclipmanager` and installs its components
+- sets up the **offline AI**. It looks for your existing Ollama models first, in `L:\.DoNotTouch\models\.ollama`, then `J:\ai\ollama_models`, then Ollama's usual folder. It uses whichever already has a vision model such as `qwen2.5vl`, so there's nothing to download, and points Ollama at that folder (`OLLAMA_MODELS`). It only downloads the model (about 6 GB, into L:) if no vision model is found. Other files in those drives, like your image-generation models, are never read or changed.
+- installs the **DaVinci Resolve** script if Resolve is installed
+- puts a **Clip Manager** icon on your desktop and starts the app
 
-**Updates are automatic.** Every start checks GitHub first:
+**First start:** a setup wizard walks you through:
+1. Your free Twitch keys, with step-by-step instructions and a *Test* button.
+2. Choosing the AI: your model folders and models, start or restart Ollama, download progress, and an optional Claude key with its own *Test* button.
+3. Connecting Resolve.
+4. Adding your first streamer.
+
+You can rerun the wizard any time from **Settings → Run the setup wizard**.
+
+**Every day:** double-click the **Clip Manager** desktop icon. It checks GitHub for updates first:
 
 | Situation | What happens |
 |---|---|
@@ -48,7 +55,11 @@ Add any streamer and the app pulls **every** public clip. An AI then *watches* e
 | You're offline | It starts the version you already have |
 | An update can't be applied (a file in use, or app files edited by hand) | It keeps the working version and tells you. Running `install.bat` again repairs it |
 
-Your settings, clip database and downloaded videos (`data\`, `library\`) are never touched by updates or repairs. Running `install.bat` again at any time updates and repairs an existing install. It also converts a copy you downloaded as a ZIP into one that auto-updates.
+Your settings, clip database, downloaded videos and Ollama models are never touched by updates or repairs.
+
+**If something goes wrong:**
+- **Install:** the installer stops, says which step failed, and opens a problem report in Notepad (`ClipManager-problem.txt` on your desktop). Copy it and send it. Every step is also logged in `%LOCALAPPDATA%\ClipManager\install.log`.
+- **App:** go to **Settings → Copy diagnostics** and paste the result. Keys and passwords are never included.
 
 macOS/Linux: run `scripts/start.sh`. It does the same update check and installs components when needed.
 
@@ -59,9 +70,7 @@ Whisper (speech) and the vision model can each have their own GPU. In Settings, 
 ### DaVinci Resolve Studio
 
 - **Direct:** in Resolve go to *Preferences → System → General → External scripting using* and choose **Local**. Then use **To Resolve** on a clip, or select several and press **To Resolve**. A project must be open.
-- **From inside Resolve:** copy `resolve/Clip Manager.py` to
-  `%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\`.
-  Press **Queue for Resolve** in the app, then run *Workspace → Scripts → Clip Manager* in Resolve.
+- **From inside Resolve:** the installer, or the setup wizard's *Install script* button, adds a **Clip Manager** entry to Resolve's *Workspace → Scripts* menu. Press **Queue for Resolve** in the app, then run that script in Resolve.
 
 Clips are only downloaded once they've been analysed. Downloaded files live in `library/<streamer>/`, and you can change that folder in Settings.
 
@@ -80,7 +89,7 @@ Iterating toward zero errors: run `spotcheck`, change one thing, and repeat. Thi
 
 ## What was tested
 
-`backend/tests` has 435 automated tests plus a browser end-to-end suite:
+`backend/tests` has over 500 automated tests plus a browser end-to-end suite. The Windows installer and launcher are also run in a Windows environment (Wine with Windows Git and Windows Python):
 
 | Area | How | Result |
 |---|---|---|
@@ -92,6 +101,9 @@ Iterating toward zero errors: run `spotcheck`, change one thing, and repeat. Thi
 | Search (keyword only) | 45 normal + 20 synonym + 20 held-out labelled queries | Normal 100% top-1 · synonyms 90% top-1 / 100% top-5 · held-out 95% top-1 / 100% top-5 |
 | UI | Playwright in Chromium: search, filters, clip sheet, ask, correct, analyse, select, Resolve queue, settings, light mode, phone layout; repeated 5× | All pass, zero console errors, no horizontal scroll at 390 px |
 | Frame extraction | Real FFmpeg on a generated 12 s video | Frames at the expected timestamps |
+| Windows install & updates | 16 scenarios, 46 checks: fresh install from a lone install.bat, updates (including ones that rewrite the running launcher), offline, edited files, repair, ZIP adoption, a failing install, a crash, switching to `main` | All pass; failures produce a problem report naming the step, with the pip error in the log |
+| Existing Ollama models | Fake L: and J: drives laid out like the real ones, next to image-generation models, on Windows Python | Finds both stores, uses the one with a vision model, prefers L: when both have it, sets `OLLAMA_MODELS`, skips the 6 GB download, and leaves other folders untouched |
+| Setup wizard | Playwright through every step with fake Twitch, Claude and Ollama | Wrong keys explained, model folder chosen, Ollama restarted, Resolve script installed, settings saved |
 
 Not tested in the development sandbox (it couldn't reach Twitch, Hugging Face or a GPU): live Twitch downloads, Whisper/Ollama on CUDA, the meaning-search model, and a live Resolve import. The Resolve code is tested against a faithful fake of Resolve's API. Use the `evaluate` commands above for the real-footage numbers.
 

@@ -176,6 +176,9 @@ def run_pipeline(clip_id: str, provider_name: str | None = None, progress: Progr
         progress(pct, msg)
 
     provider = get_provider(provider_name)
+    if provider.name == "local":
+        from .services import ollama_manager
+        ollama_manager.ensure_running()
     ok, why = provider.available()
     if not ok:
         raise AIError(why)

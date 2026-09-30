@@ -28,6 +28,13 @@ class Settings(BaseModel):
     # Local (offline)
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5vl:7b"
+    # Existing Ollama model folders to look in, in order of preference.
+    ollama_model_dirs: list[str] = [
+        r"L:\.DoNotTouch\models\.ollama",
+        r"J:\ai\ollama_models",
+    ]
+    # The model folder chosen for Ollama ("" = let the app pick).
+    ollama_models_dir: str = ""
 
     # Online
     anthropic_api_key: str = ""
@@ -50,6 +57,9 @@ class Settings(BaseModel):
 
     # Resolve
     resolve_bin_root: str = "Twitch Clips"
+
+    # First-run setup wizard finished
+    setup_complete: bool = False
 
 
 _lock = threading.Lock()

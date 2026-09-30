@@ -108,6 +108,30 @@ export type Status = {
   claude: { ok: boolean; message: string };
 };
 
+export type OllamaModel = { name: string; size: number; vision: boolean; complete: boolean; missing_blobs: number };
+export type OllamaStore = { path: string; root: string; size: number; models: OllamaModel[] };
+export type PullState = { model: string | null; status: string; percent: number; error: string | null; done: boolean };
+export type OllamaStatus = {
+  stores: OllamaStore[];
+  notes: string[];
+  choice: { store: string | null; model: string; needs_download: boolean; reason: string };
+  installed: boolean;
+  running: boolean;
+  running_models: string[];
+  mismatch: boolean;
+  env_models_dir: string;
+  model: string;
+  pull: PullState;
+};
+export type ResolveStatus = { resolve_installed: boolean; script_installed: boolean; script_current: boolean; script_path: string };
+export type CheckResult = { ok: boolean; message: string };
+
+export function fmtBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  return `${Math.round(n / 1e3)} KB`;
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,

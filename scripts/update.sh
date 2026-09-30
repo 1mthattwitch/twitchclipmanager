@@ -9,6 +9,15 @@ echo "Checking for updates..."
 if ! git fetch --quiet origin >/dev/null 2>&1; then
   echo "Couldn't reach GitHub. Starting the version you already have."; exit 0
 fi
+# Once "main" has the app and already contains this version, follow main from now on.
+if [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" != "main" ] \
+   && git cat-file -e origin/main:ClipManager.bat 2>/dev/null \
+   && git merge-base --is-ancestor HEAD origin/main 2>/dev/null \
+   && git diff --quiet HEAD 2>/dev/null \
+   && git checkout --quiet -B main origin/main 2>/dev/null; then
+  git branch --quiet --set-upstream-to=origin/main >/dev/null 2>&1
+  echo "Switched to the main update channel."
+fi
 LOCAL=$(git rev-parse HEAD 2>/dev/null)
 REMOTE=$(git rev-parse '@{u}' 2>/dev/null) || { echo "This copy isn't linked to an update channel."; exit 0; }
 if [ "$LOCAL" = "$REMOTE" ]; then echo "You have the latest version."; exit 0; fi

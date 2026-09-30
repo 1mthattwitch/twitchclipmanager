@@ -32,6 +32,22 @@ if errorlevel 1 (
   exit /b 0
 )
 
+REM Once "main" has the app and already contains this version, follow main from now on.
+set "CUR="
+for /f "delims=" %%A in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CUR=%%A"
+if /i "%CUR%"=="main" goto :channel_ok
+git cat-file -e "origin/main:ClipManager.bat" >nul 2>nul
+if errorlevel 1 goto :channel_ok
+git merge-base --is-ancestor HEAD origin/main >nul 2>nul
+if errorlevel 1 goto :channel_ok
+git diff --quiet HEAD >nul 2>nul
+if errorlevel 1 goto :channel_ok
+git checkout --quiet -B main origin/main >nul 2>nul
+if errorlevel 1 goto :channel_ok
+git branch --quiet --set-upstream-to=origin/main >nul 2>nul
+echo Switched to the main update channel.
+:channel_ok
+
 set "LOCAL="
 set "REMOTE="
 for /f "delims=" %%A in ('git rev-parse HEAD 2^>nul') do set "LOCAL=%%A"

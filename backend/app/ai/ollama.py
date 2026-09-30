@@ -16,7 +16,8 @@ class OllamaProvider(Provider):
         s = config.get_settings()
         self.url = s.ollama_url.rstrip("/")
         self.model = s.ollama_model
-        self.http = http or httpx.Client(timeout=600)
+        # Ollama is local: never route it through a system/corporate proxy.
+        self.http = http or httpx.Client(timeout=600, trust_env=False)
 
     @property
     def label(self) -> str:

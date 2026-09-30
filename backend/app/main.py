@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import subprocess
 import sys
 import threading
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -16,16 +18,41 @@ from fastapi.staticfiles import StaticFiles
 from . import analyze, config, db, embed, media, resolve_bridge, search, transcribe, worker
 from .ai.base import AIError, get_provider
 from .ai.prompts import CATEGORIES
+from .services import diagnostics, ollama_manager, resolve_setup
 from .twitch import TwitchClient, TwitchError
 
 FRONTEND_DIST = config.ROOT_DIR / "frontend" / "dist"
 
 
+def _setup_logging() -> None:
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    if any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+        return
+    handler = RotatingFileHandler(config.DATA_DIR / "app.log", maxBytes=1_000_000, backupCount=3,
+                                  encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
+def _autostart_ollama() -> None:
+    """In offline mode, start Ollama (with the chosen model folder) if it's installed but not running."""
+    try:
+        if config.get_settings().ai_mode == "local" and ollama_manager.find_exe():
+            ollama_manager.ensure_running()
+    except Exception:
+        logging.getLogger(__name__).exception("Couldn't auto-start Ollama")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _setup_logging()
+    logging.getLogger(__name__).info("Clip Manager starting")
     db.connect()
     if os.environ.get("TCM_NO_WORKER") != "1":
         worker.start()
+        threading.Thread(target=_autostart_ollama, daemon=True).start()
         # Load (or first-time download) the search model without blocking startup.
         threading.Thread(target=embed.available, daemon=True).start()
     yield
@@ -350,6 +377,107 @@ def resolve_ack(body: dict = Body(...)):
 @app.get("/api/resolve/bridge.py", response_class=PlainTextResponse)
 def resolve_bridge_source():
     return Path(resolve_bridge.__file__).read_text("utf-8")
+
+
+# ---------- setup: Ollama, Resolve, keys, diagnostics ----------
+
+@app.get("/api/ollama/status")
+def ollama_status():
+    return ollama_manager.status()
+
+
+@app.post("/api/ollama/use")
+def ollama_use(body: dict = Body(...)):
+    """Choose the model folder + model; sets OLLAMA_MODELS system-wide as the user asked."""
+    done = ollama_manager.apply_choice(body.get("store") or None, body.get("model") or ollama_manager.DEFAULT_MODEL)
+    return {"done": done, "status": ollama_manager.status()}
+
+
+@app.post("/api/ollama/start")
+def ollama_start():
+    if not ollama_manager.start():
+        _bad(ValueError("Ollama didn't start. Is it installed? Get it from ollama.com/download"))
+    return ollama_manager.status()
+
+
+@app.post("/api/ollama/restart")
+def ollama_restart(body: dict = Body(default={})):
+    store = body.get("store") or config.get_settings().ollama_models_dir
+    if not ollama_manager.restart(store):
+        _bad(ValueError("Ollama didn't come back after restarting. Open it from the Start menu."))
+    return ollama_manager.status()
+
+
+@app.post("/api/ollama/pull")
+def ollama_pull(body: dict = Body(default={})):
+    if not ollama_manager.ensure_running():
+        _bad(ValueError("Ollama isn't running and couldn't be started."))
+    ollama_manager.pull_in_background(body.get("model") or config.get_settings().ollama_model)
+    return ollama_manager.pull_state()
+
+
+@app.get("/api/resolve/status")
+def resolve_status():
+    return resolve_setup.script_status()
+
+
+@app.post("/api/resolve/install-script")
+def resolve_install_script():
+    try:
+        return resolve_setup.install_script()
+    except OSError as e:
+        _bad(ValueError(f"Couldn't install the Resolve script: {e}"))
+
+
+@app.post("/api/resolve/test")
+def resolve_test():
+    return resolve_setup.check_connection()
+
+
+@app.post("/api/setup/test-twitch")
+def setup_test_twitch(body: dict = Body(default={})):
+    s = config.get_settings()
+    cid = body.get("client_id") or s.twitch_client_id
+    secret = body.get("client_secret")
+    if not secret or secret.startswith("••"):
+        secret = s.twitch_client_secret
+    try:
+        TwitchClient(cid, secret)._get_token()
+    except TwitchError as e:
+        return {"ok": False, "message": str(e)}
+    except Exception as e:
+        return {"ok": False, "message": f"Couldn't reach Twitch: {e}"}
+    return {"ok": True, "message": "Twitch accepted your keys."}
+
+
+@app.post("/api/setup/test-claude")
+def setup_test_claude(body: dict = Body(default={})):
+    import anthropic
+    key = body.get("api_key")
+    if not key or key.startswith("••"):
+        key = config.get_settings().anthropic_api_key
+    if not key:
+        return {"ok": False, "message": "Paste your API key first."}
+    try:
+        anthropic.Anthropic(api_key=key, max_retries=0, timeout=15).models.list(limit=1)
+    except anthropic.AuthenticationError:
+        return {"ok": False, "message": "Claude rejected that key. Copy it again from console.anthropic.com."}
+    except anthropic.APIConnectionError:
+        return {"ok": False, "message": "Couldn't reach Claude. Check your internet connection."}
+    except anthropic.APIStatusError as e:
+        return {"ok": False, "message": f"Claude answered {e.status_code}: {e.message}"}
+    return {"ok": True, "message": "Claude accepted your key."}
+
+
+@app.post("/api/setup/complete")
+def setup_complete(body: dict = Body(default={})):
+    config.save_settings({"setup_complete": bool(body.get("complete", True))})
+    return {"ok": True}
+
+
+@app.get("/api/diagnostics", response_class=PlainTextResponse)
+def get_diagnostics():
+    return diagnostics.report(status())
 
 
 # ---------- media ----------
