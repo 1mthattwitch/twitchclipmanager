@@ -4,7 +4,8 @@ import { Button, Empty, Icon, LargeTitle, ProgressRing, Spinner, useToast } from
 
 const KIND_LABEL = { sync: "Fetching clips", analyze: "Watching clip", verify: "Double-checking" } as const;
 
-export function QueuePage({ jobs, counts, info, reload, onOpen, onFix }: {
+export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }: {
+  version?: string;
   jobs: Job[];
   counts: Record<string, number>;
   info: QueueInfo;
@@ -46,8 +47,11 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix }: {
           {paused.auto && <div className="mt-1 text-[14px] text-label">{paused.reason}</div>}
           <div className="mt-1 text-[13px] text-label2">
             {paused.auto
-              ? "Waiting clips are kept. Fix the problem, then press Resume."
+              ? "Waiting clips are kept. Fix the problem, then press Resume. If you've just updated, press Resume to try again."
               : "Waiting clips are kept. Nothing new is analysed until you resume."}
+          </div>
+          <div className="mt-1 text-[12px] text-label3">
+            Paused {new Date(paused.at * 1000).toLocaleString()}{version ? ` · running version ${version}` : ""}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {paused.auto && <Button kind="gray" onClick={onFix}>Fix it: open setup</Button>}

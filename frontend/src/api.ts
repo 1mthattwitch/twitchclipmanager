@@ -119,6 +119,7 @@ export type Status = {
   embeddings_state?: "ready" | "loading" | "off";
   whisper_device?: string | null;
   mode: "local" | "claude";
+  version?: string;
   local: { ok: boolean; message: string };
   claude: { ok: boolean; message: string };
 };

@@ -20,12 +20,21 @@ def _tail(path: Path, lines: int) -> str:
     return "\n".join(text[-lines:]) or "(empty)"
 
 
+_version: str | None = None
+
+
 def _git_version() -> str:
-    try:
-        return subprocess.run(["git", "-C", str(config.ROOT_DIR), "log", "-1", "--format=%h %cd", "--date=short"],
-                              capture_output=True, text=True, timeout=5).stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
+    """The running version, e.g. "e07ee9b 2026-09-30". Updates only apply on restart, so cache it."""
+    global _version
+    if _version is None:
+        try:
+            _version = subprocess.run(
+                ["git", "-C", str(config.ROOT_DIR), "log", "-1", "--format=%h %cd", "--date=short"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip() or "unknown"
+        except (OSError, subprocess.SubprocessError):
+            _version = "unknown"
+    return _version
 
 
 def app_log_path() -> Path:

@@ -26,6 +26,14 @@ def test_crlf_and_ascii(bat):
 
 
 @pytest.mark.parametrize("bat", BATS, ids=lambda p: p.name)
+def test_labels_defined_once(bat):
+    """cmd jumps to the first copy of a label; a second copy is always a mistake."""
+    labels = [m.lower() for m in re.findall(r"^:([A-Za-z_][\w-]*)", bat.read_text(), re.M)]
+    dupes = {lab for lab in labels if labels.count(lab) > 1}
+    assert not dupes, f"labels defined more than once: {dupes}"
+
+
+@pytest.mark.parametrize("bat", BATS, ids=lambda p: p.name)
 def test_goto_and_call_targets_exist(bat):
     text = bat.read_text()
     labels = {m.lower() for m in re.findall(r"^:([A-Za-z_][\w-]*)", text, re.M)}

@@ -141,7 +141,7 @@ export default function App() {
                   goTo={setTab}
                 />
               )}
-              {tab === "queue" && <QueuePage jobs={jobs} counts={counts} info={queueInfo} reload={loadJobs} onOpen={setOpenClip} onFix={() => setSetup(1)} />}
+              {tab === "queue" && <QueuePage jobs={jobs} counts={counts} info={queueInfo} reload={loadJobs} onOpen={setOpenClip} onFix={() => setSetup(1)} version={status?.version} />}
               {tab === "settings" && <SettingsPage theme={theme} setTheme={setTheme} onSaved={() => api.get<Status>("/api/status").then(setStatus)} onRunSetup={(step) => setSetup(step)} />}
             </motion.div>
           </AnimatePresence>

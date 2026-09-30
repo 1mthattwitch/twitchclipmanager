@@ -33,8 +33,10 @@ def repos(tmp_path):
     return remote, app, publish
 
 
-def run(app):
-    r = subprocess.run(["bash", str(UPDATE), str(app)], capture_output=True, text=True, timeout=60)
+def run(app, dev="feature"):
+    import os
+    env = {**os.environ, "CM_BRANCH": dev}
+    r = subprocess.run(["bash", str(UPDATE), str(app)], capture_output=True, text=True, timeout=60, env=env)
     assert r.returncode == 0, "the updater must never block startup"
     return r.stdout
 
@@ -113,3 +115,66 @@ def test_switches_channel_after_merge(tmp_path):
     assert "Switched to the main update channel" in out
     assert git(app, "rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert git(app, "rev-parse", "--abbrev-ref", "main@{u}") == "origin/main"
+
+
+@pytest.fixture()
+def channels(tmp_path):
+    """GitHub with main (merged PRs) and a development branch that fixes are pushed to."""
+    remote, dev, app = tmp_path / "r.git", tmp_path / "dev", tmp_path / "app"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    git(tmp_path, "clone", "-q", str(remote), str(dev))
+    (dev / "ClipManager.bat").write_text("stub\r\n")
+    (dev / "app.txt").write_text("v1\n")
+    git(dev, "add", "-A"); git(dev, "commit", "-qm", "v1")
+    git(dev, "push", "-q", "origin", "HEAD:main"); git(dev, "push", "-q", "origin", "HEAD:feature")
+    git(tmp_path, "clone", "-q", "-b", "main", str(remote), str(app))
+
+    def fix(text, base="origin/feature"):  # a fix pushed to the development branch, not merged yet
+        git(dev, "fetch", "-q", "origin")
+        git(dev, "checkout", "-q", "-B", "feature", base)
+        (dev / "app.txt").write_text(text)
+        git(dev, "commit", "-qam", text.strip()); git(dev, "push", "-q", "-f", "origin", "HEAD:feature")
+
+    def merge():  # "Merge pull request" on GitHub: a merge commit on main
+        git(dev, "fetch", "-q", "origin")
+        git(dev, "checkout", "-q", "-B", "main", "origin/main")
+        git(dev, "merge", "-q", "--no-ff", "-m", "Merge pull request", "origin/feature")
+        git(dev, "push", "-q", "origin", "HEAD:main")
+    return app, fix, merge
+
+
+def test_unmerged_fix_arrives_without_merging(channels):
+    app, fix, merge = channels
+    fix("v2 fixed\n")
+    out = run(app)
+    assert "newest-fixes update channel" in out and "Updated to the latest version. 1 change(s)." in out
+    assert (app / "app.txt").read_text() == "v2 fixed\n"
+    assert git(app, "rev-parse", "--abbrev-ref", "HEAD") == "feature"
+    assert "latest version" in run(app)
+
+
+def test_back_to_main_once_merged_then_next_fix(channels):
+    app, fix, merge = channels
+    fix("v2\n"); run(app)
+    merge()
+    out = run(app)
+    assert "Switched to the main update channel" in out
+    assert git(app, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert (app / "app.txt").read_text() == "v2\n"
+    # after a merge the development branch restarts from main
+    fix("v3\n", base="origin/main")
+    out = run(app)
+    assert "Updated to the latest version" in out and (app / "app.txt").read_text() == "v3\n"
+
+
+def test_nothing_new_on_either_branch(channels):
+    app, _, _ = channels
+    assert "You have the latest version" in run(app)
+
+
+def test_local_edits_still_block_updates_from_either_branch(channels):
+    app, fix, _ = channels
+    (app / "app.txt").write_text("my edit\n")
+    fix("v2\n")
+    out = run(app)
+    assert "files in the app folder were edited" in out and (app / "app.txt").read_text() == "my edit\n"

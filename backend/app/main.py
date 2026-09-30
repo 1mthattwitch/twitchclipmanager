@@ -50,6 +50,12 @@ async def lifespan(app: FastAPI):
     _setup_logging()
     logging.getLogger(__name__).info("Clip Manager starting")
     db.connect()
+    stale = worker.paused()
+    if stale.get("auto"):
+        # Paused by the app last session. An update may have fixed the cause; if not,
+        # 5 more identical failures pause it again.
+        worker.resume()
+        logging.getLogger(__name__).info("Cleared automatic pause from last session: %s", stale.get("reason"))
     removed = media.clear_temp()
     if removed:
         logging.getLogger(__name__).info("Removed %s leftover video(s) from an interrupted analysis", removed)
@@ -115,6 +121,7 @@ def status():
         "twitch": bool(s.twitch_client_id and s.twitch_client_secret),
         "ffmpeg": bool(media.ffmpeg_exe()),
         "mode": s.ai_mode,
+        "version": diagnostics._git_version(),
     }
     out["whisper"] = importlib.util.find_spec("faster_whisper") is not None
     out["embeddings_state"] = embed.status()
