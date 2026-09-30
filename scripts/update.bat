@@ -50,17 +50,6 @@ git branch --quiet --set-upstream-to="origin/%CHANNEL%" >nul 2>nul
 if /i "%CHANNEL%"=="main" echo Switched to the main update channel.
 if /i not "%CHANNEL%"=="main" echo Switched to the newest-fixes update channel.
 :channel_ok
-git cat-file -e "origin/main:ClipManager.bat" >nul 2>nul
-if errorlevel 1 goto :channel_ok
-git merge-base --is-ancestor HEAD origin/main >nul 2>nul
-if errorlevel 1 goto :channel_ok
-git diff --quiet HEAD >nul 2>nul
-if errorlevel 1 goto :channel_ok
-git checkout --quiet -B main origin/main >nul 2>nul
-if errorlevel 1 goto :channel_ok
-git branch --quiet --set-upstream-to=origin/main >nul 2>nul
-echo Switched to the main update channel.
-:channel_ok
 
 set "LOCAL="
 set "REMOTE="
