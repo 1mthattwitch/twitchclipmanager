@@ -101,6 +101,8 @@ export type Status = {
   ffmpeg: boolean;
   whisper: boolean;
   embeddings: boolean;
+  embeddings_state?: "ready" | "loading" | "off";
+  whisper_device?: string | null;
   mode: "local" | "claude";
   local: { ok: boolean; message: string };
   claude: { ok: boolean; message: string };
@@ -109,7 +111,8 @@ export type Status = {
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    // The server refuses actions without this header, so other websites can't trigger them.
+    headers: { "X-Clip-Manager": "1", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {

@@ -223,7 +223,7 @@ def search(q: str = "", filters: dict | None = None, sort: str = "newest",
     # Meaning ranking
     mode = "keyword"
     ids, mat = _vectors()
-    if len(ids):
+    if len(ids) and not embed.loading():  # don't make a search wait for a first-run download
         qv = embed.embed([q], query=True)
         if qv is not None:
             mode = "hybrid"

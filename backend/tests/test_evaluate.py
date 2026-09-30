@@ -1,6 +1,6 @@
 import json
 
-from app import analyze, config, db, evaluate
+from app import config, db, evaluate
 from app.bench_data import seed
 from conftest import add_clip, add_streamer
 from test_pipeline import StubProvider

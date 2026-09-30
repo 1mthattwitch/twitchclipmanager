@@ -123,7 +123,7 @@ export function SettingsPage({ theme, setTheme, onSaved }: { theme: string; setT
         <Row label="GPU number" last>{text("whisper_gpu_index", "0", "number")}</Row>
       </Group>
 
-      <Group title="Processing" footer={status ? `FFmpeg ${status.ffmpeg ? "found" : "missing"} · meaning search ${status.embeddings ? "on" : "off (pip install fastembed)"}` : undefined}>
+      <Group title="Processing" footer={status ? `FFmpeg ${status.ffmpeg ? "found" : "missing"} · meaning search ${status.embeddings ? "on" : status.embeddings_state === "loading" ? "downloading its model…" : "off (pip install fastembed)"}` : undefined}>
         <Row label="Analyse new clips automatically"><Toggle checked={!!v.auto_analyze_new_clips} onChange={(b) => set("auto_analyze_new_clips", b)} label="Auto analyse" /></Row>
         <Row label="Re-check unsure clips when idle"><Toggle checked={!!v.background_recheck} onChange={(b) => set("background_recheck", b)} label="Background recheck" /></Row>
         <Row label="Frames per clip" detail="More = better understanding, slower">{text("frames_per_clip", "6", "number")}</Row>

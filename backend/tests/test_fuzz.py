@@ -87,7 +87,7 @@ def test_api_rejects_bad_input_cleanly():
     from fastapi.testclient import TestClient
     from app.main import app
     seed(add_streamer, add_clip)
-    with TestClient(app, raise_server_exceptions=False) as c:
+    with TestClient(app, raise_server_exceptions=False, headers={"X-Clip-Manager": "1"}) as c:
         assert c.get("/api/clips/does-not-exist").status_code == 404
         assert c.post("/api/clips/does-not-exist/ask", json={"question": "hi"}).status_code == 404
         assert c.post("/api/clips/c01/ask", json={"question": ""}).status_code == 400

@@ -29,6 +29,20 @@ def available() -> bool:
         return _load() is not None
 
 
+def loading() -> bool:
+    """True while the model is being downloaded/loaded for the first time."""
+    return _model is None and not _failed and _lock.locked()
+
+
+def status() -> str:
+    """'ready', 'loading' (first-run download in progress) or 'off'. Never blocks."""
+    if _model is not None:
+        return "ready"
+    if _failed:
+        return "off"
+    return "loading" if _lock.locked() else ("ready" if available() else "off")
+
+
 def embed(texts: list[str], query: bool = False) -> np.ndarray | None:
     with _lock:
         model = _load()

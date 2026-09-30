@@ -6,7 +6,7 @@ from conftest import add_clip, add_streamer
 
 
 def test_settings_masks_secrets():
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
         c.put("/api/settings", json={"twitch_client_secret": "supersecret1234", "ai_mode": "claude"})
         s = c.get("/api/settings").json()["settings"]
         assert s["twitch_client_secret"] == "••••1234"
@@ -19,7 +19,7 @@ def test_settings_masks_secrets():
 def test_clip_endpoints():
     sid = add_streamer("alpha")
     add_clip(sid, "a1", "huge clutch", summary="wins the round", category="Clutch / Highlight", status="done")
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
         res = c.get("/api/clips", params={"q": "clutch"}).json()
         assert res["results"][0]["id"] == "a1"
         clip = c.get("/api/clips/a1").json()

@@ -1,6 +1,7 @@
 """FastAPI app: JSON API under /api, media under /media, the built UI at /."""
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -8,8 +9,8 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import analyze, config, db, embed, media, resolve_bridge, search, transcribe, worker
@@ -32,6 +33,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Twitch Clip Manager", lifespan=lifespan)
+
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
+ACTION_HEADER = "x-clip-manager"
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    """Only this computer's browser may use the app.
+
+    The Host check stops DNS-rebinding tricks; the custom header on actions stops other
+    websites from making your browser POST here (browsers can't add it cross-site).
+    """
+    host = (request.headers.get("host") or "").strip()
+    hostname = host[1:host.index("]")] if host.startswith("[") and "]" in host else host.rsplit(":", 1)[0]
+    if hostname.lower() not in LOCAL_HOSTS:
+        return JSONResponse({"detail": "Only available from this computer."}, status_code=403)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get(ACTION_HEADER) != "1":
+        return JSONResponse({"detail": "Missing X-Clip-Manager header."}, status_code=403)
+    return await call_next(request)
 
 
 def _clip_or_404(clip_id: str) -> dict:
@@ -66,13 +86,11 @@ def status():
         "ffmpeg": bool(media.ffmpeg_exe()),
         "mode": s.ai_mode,
     }
-    try:
-        import faster_whisper  # noqa: F401
-        out["whisper"] = True
-    except ImportError:
-        out["whisper"] = False
-    out["embeddings"] = embed.available()
+    out["whisper"] = importlib.util.find_spec("faster_whisper") is not None
+    out["embeddings_state"] = embed.status()
+    out["embeddings"] = out["embeddings_state"] == "ready"
     out["whisper_error"] = transcribe.last_error()
+    out["whisper_device"] = transcribe.device_in_use()
     for name in ("local", "claude"):
         try:
             ok, msg = get_provider(name).available()
