@@ -7,21 +7,96 @@ over VRAM.
 from __future__ import annotations
 
 import json
+import logging
+import re
 import threading
 import time
 import traceback
+from collections import deque
 from datetime import datetime, timedelta, timezone
 
 from . import analyze, config, db
 from .twitch import CLIPS_EPOCH, TwitchClient, iso, parse_iso
 
+log = logging.getLogger(__name__)
 LANES = {"net": ("sync",), "gpu": ("analyze", "verify")}
 IDLE_SLEEP = 2.0
 RECHECK_EVERY = 24 * 3600
+MAX_ATTEMPTS = 3
+RETRY_DELAY = 5.0
+# This many analyses in a row failing for the same reason means the setup is
+# broken (Ollama down, downloads blocked...), not the clips: pause instead of
+# burning through the whole queue.
+PAUSE_AFTER = 5
 
 _stop = threading.Event()
 _wake = threading.Event()
 _threads: list[threading.Thread] = []
+_streak = {"reason": None, "n": 0}
+_durations: deque[float] = deque(maxlen=20)  # seconds per recent analysis
+
+
+# ---------- pausing ----------
+
+def normalize_reason(message: str | None) -> str:
+    """The same problem worded the same way, whichever clip it happened to."""
+    text = (message or "Unknown error").strip().splitlines()[0] if (message or "").strip() else "Unknown error"
+    text = re.sub(r"\s*\(retry \d+/\d+\)$", "", text)
+    text = re.sub(r"https?://[^\s)\]]+?(?=[.,]?(\s|\)|\]|$))", "<link>", text)
+    text = re.sub(r"(?<![\w-])[\w-]*(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{12,}", "<clip>", text)
+    text = re.sub(r"\d{5,}", "<n>", text)
+    text = re.sub(r"'[^']*\.(mp4|part)'", "<file>", text)
+    return text[:160]
+
+
+def paused() -> dict:
+    return config.get_settings().analysis_paused or {}
+
+
+def pause(reason: str = "Paused by you", auto: bool = False) -> None:
+    config.save_settings({"analysis_paused": {"reason": reason, "at": db.now(), "auto": auto}})
+
+
+def resume() -> None:
+    _streak.update(reason=None, n=0)
+    if paused():
+        config.save_settings({"analysis_paused": {}})
+    _wake.set()
+
+
+def _note_result(job: dict, error: Exception | None) -> None:
+    """Track identical failures in a row; pause analysis when the setup looks broken."""
+    if job["kind"] != "analyze":
+        return
+    from .media import ClipGone
+    if error is None or isinstance(error, ClipGone):
+        if error is None:
+            _streak.update(reason=None, n=0)
+        return
+    reason = normalize_reason(str(error))
+    if reason == _streak["reason"]:
+        _streak["n"] += 1
+    else:
+        _streak.update(reason=reason, n=1)
+    if _streak["n"] >= PAUSE_AFTER and not paused():
+        log.warning("Pausing analysis: %s analyses in a row failed with: %s", _streak["n"], reason)
+        pause(reason, auto=True)
+
+
+def error_groups(limit: int = 5) -> list[dict]:
+    groups: dict[str, int] = {}
+    for r in db.query("SELECT message FROM jobs WHERE status = 'error'"):
+        key = normalize_reason(r["message"])
+        groups[key] = groups.get(key, 0) + 1
+    top = sorted(groups.items(), key=lambda kv: -kv[1])[:limit]
+    return [{"reason": k, "count": n} for k, n in top]
+
+
+def estimate_seconds(waiting: int) -> float | None:
+    """Time left for the waiting analyses, from how long recent ones took."""
+    if not _durations or not waiting:
+        return None
+    return sum(_durations) / len(_durations) * waiting
 
 
 # ---------- enqueueing ----------
@@ -109,7 +184,8 @@ def run_sync(job: dict, client: TwitchClient | None = None) -> str:
     if not streamer:
         raise ValueError("Streamer was removed")
     client = client or TwitchClient()
-    end = datetime.now(timezone.utc)
+    # A minute of slack: Twitch's ended_at is exclusive and we send whole seconds.
+    end = datetime.now(timezone.utc) + timedelta(minutes=1)
     if params.get("since_days"):
         start = end - timedelta(days=int(params["since_days"]))
     elif streamer.get("synced_until") and not params.get("full"):
@@ -196,13 +272,17 @@ def _loop(lane: str) -> None:
     kinds = LANES[lane]
     idle_since = time.time()
     while not _stop.is_set():
+        if lane == "gpu" and paused():
+            _wake.wait(IDLE_SLEEP)
+            _wake.clear()
+            continue
         try:
             job = _next_job(kinds)
         except Exception:
             traceback.print_exc()
             job = None
         if not job:
-            if lane == "gpu" and time.time() - idle_since > 30:
+            if lane == "gpu" and not paused() and time.time() - idle_since > 30:
                 idle_since = time.time()
                 try:
                     if _maybe_recheck():
@@ -212,12 +292,32 @@ def _loop(lane: str) -> None:
             _wake.wait(IDLE_SLEEP)
             _wake.clear()
             continue
+        started = time.time()
         try:
             msg = run_job(job)
             db.update("jobs", "id", job["id"], status="done", progress=1.0, message=msg, updated_at=db.now())
+            if job["kind"] == "analyze":
+                _durations.append(time.time() - started)
+            _note_result(job, None)
         except Exception as e:
-            traceback.print_exc()
-            db.update("jobs", "id", job["id"], status="error", message=str(e)[:500], updated_at=db.now())
+            params = job.get("params") or {}
+            attempts = int(params.get("attempts", 0)) + 1
+            if getattr(e, "transient", False) and attempts < MAX_ATTEMPTS:
+                # Back off, then put it back in the queue behind other work.
+                params["attempts"] = attempts
+                db.update("jobs", "id", job["id"], status="queued", params=params, progress=0,
+                          message=f"{e} (retry {attempts}/{MAX_ATTEMPTS - 1})", created_at=db.now(),
+                          updated_at=db.now())
+                if job["clip_id"] and job["kind"] == "analyze":
+                    db.update("clips", "id", job["clip_id"], status="queued")
+                _stop.wait(RETRY_DELAY * attempts)
+            else:
+                log.exception("Job %s (%s) failed", job["id"], job["kind"])
+                db.update("jobs", "id", job["id"], status="error", message=str(e)[:500], updated_at=db.now())
+                try:
+                    _note_result(job, e)
+                except Exception:
+                    traceback.print_exc()
         idle_since = time.time()
 
 

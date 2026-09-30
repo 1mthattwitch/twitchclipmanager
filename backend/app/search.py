@@ -41,12 +41,101 @@ def _vectors() -> tuple[list[str], np.ndarray]:
         return _cache
 
 
+STOPWORDS = set("""
+a an the and or but of to in on at by for with from into onto about over after before during while
+is are was were be been being am do does did has have had it its it's this that these those there
+he him his she her they them their we us our you your i me my mine who whom what which when where
+why how all any some very just so than too up down out off then only own same can will would should
+could get gets got getting moment clip clips stream streamer streaming video when where one someone
+""".split())
+
+# Streamer / editing vocabulary. Lets keyword search find clips the AI described with other words.
+SYNONYM_GROUPS = [
+    "scared scare scary frightened fear afraid terrified spooked spooky jumpscare horror creepy",
+    "scream screams screaming yell yelling shout shouting shriek",
+    "funny hilarious lol lmao laughing laugh joke comedy",
+    "rage raging angry furious mad tilted tilt fuming",
+    "fail fails failure mistake blunder throw throws oops accident",
+    "clutch highlight insane cracked ace win wins victory",
+    "dog dogs doggo puppy pup",
+    "cat cats kitty kitten",
+    "mom mum mother mama parent parents dad father family",
+    "money donation donates donated dono tip bits",
+    "raid raided raiders viewers join joins joined",
+    "kitchen cooking cook food",
+    "sing singing song karaoke",
+    "dance dancing dances",
+    "pistol handgun sheriff",
+    "quit quitting break burnout retire",
+    "muted mute unmute mic microphone",
+    "record wr speedrun",
+    "snake reptile",
+    "sleep sleeping asleep napping nap",
+    "crash crashed flips flip wreck",
+    "cops cop police",
+    "teammate teammates team squad duo",
+    "chair seat",
+    "own goal",
+]
+_SYNONYMS: dict[str, set[str]] = {}
+for _group in SYNONYM_GROUPS:
+    _words = _group.split()
+    for _w in _words:
+        _SYNONYMS.setdefault(_w, set()).update(_words)
+
+
 def tokens(q: str) -> list[str]:
     return [t for t in re.findall(r"[\w']+", q.lower(), flags=re.UNICODE) if len(t) > 1]
 
 
+def query_terms(q: str) -> list[str]:
+    toks = tokens(q)
+    kept = [t for t in toks if t not in STOPWORDS]
+    return kept or toks
+
+
 def fts_query(q: str) -> str:
-    return " OR ".join(f'"{t.replace(chr(34), "")}"*' for t in tokens(q))
+    """Each query word becomes (word OR its synonyms); words are OR-ed and bm25 ranks by coverage."""
+    parts = []
+    for t in query_terms(q):
+        alts = sorted(_SYNONYMS.get(t, set()) | {t})
+        ors = " OR ".join(f'"{a.replace(chr(34), "")}"*' for a in alts)
+        parts.append(f"({ors})")
+    return " OR ".join(parts)
+
+
+BM25 = "bm25(clips_fts, 0, 3.0, 2.0, 2.0, 1.0, 1.0)"
+
+
+def _fts_ids(match: str, limit: int = 1000) -> list[str]:
+    try:
+        return [r["clip_id"] for r in db.query(
+            f"SELECT clip_id FROM clips_fts WHERE clips_fts MATCH ? ORDER BY {BM25} LIMIT ?", [match, limit])]
+    except Exception:  # malformed FTS syntax from odd input: treat as no match
+        return []
+
+
+def keyword_ranking(q: str) -> list[str]:
+    """Clips ordered by how many distinct query words they cover, then by bm25.
+
+    A clip that matches "rage" AND "malenia" beats one that matches three synonyms of "rage".
+    Exact word matches count fully, synonym-only matches count 0.6.
+    """
+    terms = query_terms(q)
+    if not terms:
+        return []
+    base = _fts_ids(fts_query(q), 300)
+    if len(terms) == 1 and not _SYNONYMS.get(terms[0]):
+        return base
+    order = {cid: i for i, cid in enumerate(base)}
+    coverage = dict.fromkeys(base, 0.0)
+    for t in terms:
+        exact = set(_fts_ids(f'"{t.replace(chr(34), "")}"*'))
+        alts = _SYNONYMS.get(t, set()) - {t}
+        syn = set(_fts_ids(" OR ".join(f'"{a}"*' for a in alts))) if alts else set()
+        for cid in coverage:
+            coverage[cid] += 1.0 if cid in exact else 0.6 if cid in syn else 0.0
+    return sorted(base, key=lambda c: (-coverage[c], order[c]))
 
 
 def _where(f: dict) -> tuple[str, list]:
@@ -125,22 +214,16 @@ def search(q: str = "", filters: dict | None = None, sort: str = "newest",
     scores: dict[str, float] = {}
 
     # Keyword ranking
-    fq = fts_query(q)
-    if fq:
-        hits = db.query(
-            "SELECT clip_id FROM clips_fts WHERE clips_fts MATCH ? ORDER BY bm25(clips_fts, 0, 3.0, 2.0, 2.0, 1.0, 1.0) LIMIT 300",
-            [fq],
-        )
-        rank = 0
-        for h in hits:
-            if h["clip_id"] in allowed:
-                scores[h["clip_id"]] = scores.get(h["clip_id"], 0) + 1 / (RRF_K + rank)
-                rank += 1
+    rank = 0
+    for cid in keyword_ranking(q):
+        if cid in allowed:
+            scores[cid] = scores.get(cid, 0) + 1 / (RRF_K + rank)
+            rank += 1
 
     # Meaning ranking
     mode = "keyword"
     ids, mat = _vectors()
-    if len(ids):
+    if len(ids) and not embed.loading():  # don't make a search wait for a first-run download
         qv = embed.embed([q], query=True)
         if qv is not None:
             mode = "hybrid"
@@ -160,7 +243,7 @@ def search(q: str = "", filters: dict | None = None, sort: str = "newest",
     if page:
         marks = ",".join("?" * len(page))
         by_id = {r["id"]: r for r in db.query(f"{BASE} WHERE c.id IN ({marks})", page)}
-        q_tokens = tokens(q)
+        q_tokens = query_terms(q)
         for cid in page:
             clip = by_id.get(cid)
             if not clip:

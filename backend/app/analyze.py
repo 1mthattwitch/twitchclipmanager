@@ -21,43 +21,59 @@ def get_clip(clip_id: str) -> dict | None:
 
 def _clamp(v, lo, hi, default):
     try:
-        return max(lo, min(hi, type(default)(v)))
-    except (TypeError, ValueError):
+        x = type(default)(v)
+    except (TypeError, ValueError, OverflowError):
         return default
+    if x != x:  # NaN
+        return default
+    return max(lo, min(hi, x))
+
+
+def _list(v) -> list:
+    return v if isinstance(v, list) else []
+
+
+def _str(v) -> str:
+    return v.strip() if isinstance(v, str) else ""
 
 
 def normalize_analysis(raw: dict, duration: float) -> dict:
     """Make model output safe to store, whatever the model actually sent."""
-    dur = float(duration or 0) or 60.0
-    cats = set(prompts.CATEGORIES)
-    category = raw.get("category") if raw.get("category") in cats else "Other"
+    raw = raw if isinstance(raw, dict) else {}
+    dur = _clamp(duration, 0.0, 86400.0, 0.0) or 60.0
+    cats = prompts.CATEGORIES
+    category = raw.get("category") if isinstance(raw.get("category"), str) and raw["category"] in cats else "Other"
     tags: list[str] = []
-    for t in raw.get("tags") or []:
-        t = str(t).strip().lower().lstrip("#")
+    for t in _list(raw.get("tags")):
+        t = _str(t).lower().lstrip("#").strip()[:40]
         if t and t not in tags:
             tags.append(t)
     moments = []
-    for m in raw.get("moments") or []:
-        if isinstance(m, dict) and m.get("description"):
-            moments.append({"t": _clamp(m.get("t"), 0.0, dur, 0.0), "description": str(m["description"])})
+    for m in _list(raw.get("moments")):
+        if isinstance(m, dict) and _str(m.get("description")):
+            moments.append({"t": _clamp(m.get("t"), 0.0, dur, 0.0), "description": _str(m["description"])[:300]})
     moments.sort(key=lambda m: m["t"])
     best_in = _clamp(raw.get("best_in"), 0.0, dur, 0.0)
     best_out = _clamp(raw.get("best_out"), 0.0, dur, dur)
     if best_out <= best_in:
         best_in, best_out = 0.0, dur
+    secondary = []
+    for c in _list(raw.get("secondary_categories")):
+        if isinstance(c, str) and c in cats and c != category and c not in secondary:
+            secondary.append(c)
     return {
-        "summary": str(raw.get("summary") or "").strip(),
+        "summary": _str(raw.get("summary"))[:2000],
         "category": category,
-        "secondary_categories": [c for c in raw.get("secondary_categories") or [] if c in cats and c != category],
+        "secondary_categories": secondary,
         "tags": tags[:25],
         "moments": moments[:20],
-        "on_screen": [str(x) for x in raw.get("on_screen") or []][:15],
-        "mood": str(raw.get("mood") or "").strip().lower(),
+        "on_screen": [_str(x)[:80] for x in _list(raw.get("on_screen")) if _str(x)][:15],
+        "mood": _str(raw.get("mood")).lower()[:40],
         "energy": _clamp(raw.get("energy"), 1, 5, 3),
-        "profanity": bool(raw.get("profanity")),
+        "profanity": raw.get("profanity") is True,
         "best_in": best_in,
         "best_out": best_out,
-        "search_phrases": [str(x) for x in raw.get("search_phrases") or []][:10],
+        "search_phrases": [_str(x)[:120] for x in _list(raw.get("search_phrases")) if _str(x)][:10],
         "confidence": _clamp(raw.get("confidence"), 0.0, 1.0, 0.5),
     }
 
@@ -65,38 +81,42 @@ def normalize_analysis(raw: dict, duration: float) -> dict:
 def apply_verification(analysis: dict, verification: dict, threshold: float) -> tuple[dict, float, bool]:
     """Fold a fact-check back into the analysis. Returns (analysis, confidence, needs_review)."""
     analysis = dict(analysis)
-    remove = {str(t).strip().lower() for t in verification.get("remove_tags") or []}
+    verification = verification if isinstance(verification, dict) else {}
+    remove = {_str(t).lower() for t in _list(verification.get("remove_tags"))}
     if remove:
-        analysis["tags"] = [t for t in analysis["tags"] if t not in remove]
-    corrected = (verification.get("corrected_summary") or "").strip()
+        analysis["tags"] = [t for t in analysis.get("tags", []) if t not in remove]
+    corrected = _str(verification.get("corrected_summary"))
     if corrected:
-        analysis["summary"] = corrected
-    checks = verification.get("checks") or []
+        analysis["summary"] = corrected[:2000]
+    checks = [c for c in _list(verification.get("checks")) if isinstance(c, dict)]
     refuted = sum(1 for c in checks if c.get("supported") == "no")
     unsure = sum(1 for c in checks if c.get("supported") == "unsure")
     ratio = 1.0
     if checks:
         ratio = 1.0 - (refuted + 0.5 * unsure) / len(checks)
     verify_conf = _clamp(verification.get("confidence"), 0.0, 1.0, 0.5)
-    confidence = round(min(analysis["confidence"], verify_conf) * (0.5 + 0.5 * ratio), 3)
+    base = _clamp(analysis.get("confidence"), 0.0, 1.0, 0.5)
+    confidence = round(min(base, verify_conf) * (0.5 + 0.5 * ratio), 3)
     needs_review = confidence < threshold or refuted > 0
     return analysis, confidence, needs_review
 
 
 def _evidence(clip: dict) -> tuple[str, list[Path]]:
     frames = clip.get("frames") or []
-    transcript = transcribe.as_timed_text(clip.get("transcript") or [])
+    transcript = transcribe.as_timed_text(clip.get("transcript"))
     context = prompts.clip_context(clip, frames, transcript)
     images = [Path(f["path"]) for f in frames if Path(f["path"]).exists()]
     return context, images
 
 
 def _save_checks(clip_id: str, verification: dict, kind: str, provider_label: str) -> None:
-    for c in verification.get("checks") or []:
+    for c in _list(verification.get("checks")):
+        if not isinstance(c, dict):
+            continue
         supported = {"yes": 1, "no": 0}.get(c.get("supported"))
         db.execute(
             "INSERT INTO qa (clip_id, kind, question, answer, supported, provider, created_at) VALUES (?,?,?,?,?,?,?)",
-            [clip_id, kind, c.get("question") or c.get("claim") or "", c.get("answer") or "",
+            [clip_id, kind, _str(c.get("question")) or _str(c.get("claim")), _str(c.get("answer")),
              supported, provider_label, db.now()],
         )
 
@@ -115,6 +135,14 @@ def reembed(clip_id: str) -> None:
 
 def _label(provider: Provider) -> str:
     return getattr(provider, "label", provider.name)
+
+
+def describe(clip: dict, provider: Provider) -> dict:
+    """One description of a clip from its stored frames + transcript. Does not save anything."""
+    context, images = _evidence(clip)
+    raw = provider.generate_json(prompts.DESCRIBE_SYSTEM, prompts.describe_prompt(context), images,
+                                 prompts.ANALYSIS_SCHEMA)
+    return normalize_analysis(raw, clip.get("duration") or 0)
 
 
 def verify_clip(clip_id: str, provider: Provider, kind: str = "verify") -> dict:
@@ -148,6 +176,9 @@ def run_pipeline(clip_id: str, provider_name: str | None = None, progress: Progr
         progress(pct, msg)
 
     provider = get_provider(provider_name)
+    if provider.name == "local":
+        from .services import ollama_manager
+        ollama_manager.ensure_running()
     ok, why = provider.available()
     if not ok:
         raise AIError(why)
@@ -155,25 +186,31 @@ def run_pipeline(clip_id: str, provider_name: str | None = None, progress: Progr
     # 1. Download
     stage("downloading", 0.05, "Downloading clip")
     path = Path(clip["file_path"]) if clip.get("file_path") else None
+    downloaded_now = False
     if not path or not path.exists():
         path = media.download(clip, clip["streamer_login"])
+        downloaded_now = True
         db.update("clips", "id", clip_id, file_path=str(path))
 
     # 2. Frames + transcript
     stage("transcribing", 0.25, "Extracting frames")
-    frames = media.extract_frames(path, clip_id, s.frames_per_clip, clip.get("duration") or 0)
-    progress(0.35, "Transcribing speech")
-    segments = transcribe.transcribe(path)
+    try:
+        frames = media.extract_frames(path, clip_id, s.frames_per_clip, clip.get("duration") or 0)
+        progress(0.35, "Transcribing speech")
+        segments = transcribe.transcribe(path)
+    finally:
+        if downloaded_now and not s.keep_videos:
+            # Sorting only needs the frames and transcript; don't fill the disk with videos.
+            path.unlink(missing_ok=True)
+            db.update("clips", "id", clip_id, file_path=None)
+    if segments is None:
+        progress(0.45, transcribe.last_error() or "No transcript; using frames only")
     db.update("clips", "id", clip_id, frames=frames, transcript=segments,
               transcript_text=transcribe.as_text(segments))
 
     # 3. Describe
     stage("analyzing", 0.55, f"Watching with {_label(provider)}")
-    clip = get_clip(clip_id)
-    context, images = _evidence(clip)
-    raw = provider.generate_json(prompts.DESCRIBE_SYSTEM, prompts.describe_prompt(context), images,
-                                 prompts.ANALYSIS_SCHEMA)
-    analysis = normalize_analysis(raw, clip.get("duration") or 0)
+    analysis = describe(get_clip(clip_id), provider)
     db.update("clips", "id", clip_id, analysis=analysis, summary=analysis["summary"],
               category=analysis["category"], tags=analysis["tags"], mood=analysis["mood"],
               energy=analysis["energy"], confidence=analysis["confidence"], corrected=0,

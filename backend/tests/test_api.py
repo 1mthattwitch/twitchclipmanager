@@ -1,12 +1,12 @@
 from fastapi.testclient import TestClient
 
-from app import config
+from app import config, db
 from app.main import app
 from conftest import add_clip, add_streamer
 
 
 def test_settings_masks_secrets():
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
         c.put("/api/settings", json={"twitch_client_secret": "supersecret1234", "ai_mode": "claude"})
         s = c.get("/api/settings").json()["settings"]
         assert s["twitch_client_secret"] == "••••1234"
@@ -16,10 +16,11 @@ def test_settings_masks_secrets():
         assert config.get_settings().twitch_client_secret == "supersecret1234"
 
 
-def test_clip_endpoints():
+def test_clip_endpoints(tmp_path, monkeypatch):
     sid = add_streamer("alpha")
     add_clip(sid, "a1", "huge clutch", summary="wins the round", category="Clutch / Highlight", status="done")
-    with TestClient(app) as c:
+    monkeypatch.setattr("app.main._fetch_files", lambda ids: None)
+    with TestClient(app, headers={"X-Clip-Manager": "1"}) as c:
         res = c.get("/api/clips", params={"q": "clutch"}).json()
         assert res["results"][0]["id"] == "a1"
         clip = c.get("/api/clips/a1").json()
@@ -27,6 +28,9 @@ def test_clip_endpoints():
         assert c.patch("/api/clips/a1", json={"starred": True}).json()["starred"] == 1
         assert c.get("/api/clips", params={"starred": True}).json()["total"] == 1
         c.post("/api/resolve/queue", json={"ids": ["a1"]})
+        video = tmp_path / "a1.mp4"
+        video.write_bytes(b"x")  # downloaded in the background by then
+        db.update("clips", "id", "a1", file_path=str(video))
         q = c.get("/api/resolve/queue").json()
         assert q["items"][0]["clip_id"] == "a1"
         c.post("/api/resolve/queue/ack", json={"ids": [q["items"][0]["queue_id"]]})

@@ -56,19 +56,21 @@ class ClaudeProvider(Provider):
                     # If a safety classifier declines, let the API retry on a fallback model.
                     return self.client.beta.messages.create(
                         betas=[FALLBACK_BETA], fallbacks="default", **kwargs)
-                except anthropic.BadRequestError as e:
-                    if "fallback" not in str(e).lower():
-                        raise
+                except (anthropic.BadRequestError, TypeError):
+                    # Model/account/SDK doesn't accept fallbacks: retry plainly below. If the plain
+                    # request succeeds, stop sending fallbacks; if it fails too, the error is real.
+                    response = self.client.messages.create(**kwargs)
                     self._fallbacks_ok = False
+                    return response
             return self.client.messages.create(**kwargs)
         except anthropic.AuthenticationError as e:
             raise AIError("Claude rejected the API key. Check Settings.") from e
         except anthropic.RateLimitError as e:
-            raise AIError("Claude rate limit hit; the clip will be retried.") from e
+            raise AIError("Claude rate limit hit; the clip will be retried.", transient=True) from e
         except anthropic.APIStatusError as e:
-            raise AIError(f"Claude API error {e.status_code}: {e.message}") from e
+            raise AIError(f"Claude API error {e.status_code}: {e.message}", transient=e.status_code >= 500) from e
         except anthropic.APIConnectionError as e:
-            raise AIError("Couldn't reach Claude. Are you offline? Switch to Local in Settings.") from e
+            raise AIError("Couldn't reach Claude. Are you offline? Switch to Local in Settings.", transient=True) from e
 
     @staticmethod
     def _text(response) -> str:

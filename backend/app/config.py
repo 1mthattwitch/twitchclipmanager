@@ -28,6 +28,13 @@ class Settings(BaseModel):
     # Local (offline)
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5vl:7b"
+    # Existing Ollama model folders to look in, in order of preference.
+    ollama_model_dirs: list[str] = [
+        r"L:\.DoNotTouch\models\.ollama",
+        r"J:\ai\ollama_models",
+    ]
+    # The model folder chosen for Ollama ("" = let the app pick).
+    ollama_models_dir: str = ""
 
     # Online
     anthropic_api_key: str = ""
@@ -46,10 +53,25 @@ class Settings(BaseModel):
     auto_analyze_new_clips: bool = True
     background_recheck: bool = True
     review_threshold: float = 0.6
+    # Off: a clip's video is only on disk while the AI watches it, then deleted (the
+    # summary, tags, frames and transcript stay). It is downloaded again when you send
+    # it to Resolve or ask for the file. On: every analysed clip stays in library_dir.
+    keep_videos: bool = False
     library_dir: str = str(ROOT_DIR / "library")
 
     # Resolve
     resolve_bin_root: str = "Twitch Clips"
+
+    # First-run setup wizard finished
+    setup_complete: bool = False
+
+    # Analysis paused (by you, or automatically after repeated identical failures):
+    # {"reason": str, "at": float, "auto": bool}; empty = running.
+    analysis_paused: dict = {}
+
+    # Help: open this Claude chat in the browser when Clip Manager starts.
+    open_chat_on_start: bool = True
+    help_chat_url: str = "https://claude.ai/code/session_01LDpga53v3BVDvCgDVcbU4K"
 
 
 _lock = threading.Lock()

@@ -1,0 +1,5 @@
+# Windows batch files must keep CRLF line endings in every download path, including
+# GitHub raw links and ZIPs, so store them byte-for-byte instead of normalising them.
+*.bat -text
+*.cmd -text
+*.sh text eol=lf

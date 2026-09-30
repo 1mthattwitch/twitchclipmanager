@@ -1,34 +1,84 @@
 """FastAPI app: JSON API under /api, media under /media, the built UI at /."""
 from __future__ import annotations
 
+import importlib.util
+import logging
 import os
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import analyze, config, db, embed, media, resolve_bridge, search, worker
+from . import analyze, config, db, embed, media, resolve_bridge, search, transcribe, worker
 from .ai.base import AIError, get_provider
 from .ai.prompts import CATEGORIES
+from .services import diagnostics, ollama_manager, resolve_setup
 from .twitch import TwitchClient, TwitchError
 
 FRONTEND_DIST = config.ROOT_DIR / "frontend" / "dist"
 
 
+def _setup_logging() -> None:
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    if any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+        return
+    handler = RotatingFileHandler(config.DATA_DIR / "app.log", maxBytes=1_000_000, backupCount=3,
+                                  encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
+def _autostart_ollama() -> None:
+    """In offline mode, start Ollama (with the chosen model folder) if it's installed but not running."""
+    try:
+        if config.get_settings().ai_mode == "local" and ollama_manager.find_exe():
+            ollama_manager.ensure_running()
+    except Exception:
+        logging.getLogger(__name__).exception("Couldn't auto-start Ollama")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _setup_logging()
+    logging.getLogger(__name__).info("Clip Manager starting")
     db.connect()
     if os.environ.get("TCM_NO_WORKER") != "1":
         worker.start()
+        threading.Thread(target=_autostart_ollama, daemon=True).start()
+        # Load (or first-time download) the search model without blocking startup.
+        threading.Thread(target=embed.available, daemon=True).start()
     yield
     worker.stop()
 
 
 app = FastAPI(title="Twitch Clip Manager", lifespan=lifespan)
+
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
+ACTION_HEADER = "x-clip-manager"
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    """Only this computer's browser may use the app.
+
+    The Host check stops DNS-rebinding tricks; the custom header on actions stops other
+    websites from making your browser POST here (browsers can't add it cross-site).
+    """
+    host = (request.headers.get("host") or "").strip()
+    hostname = host[1:host.index("]")] if host.startswith("[") and "]" in host else host.rsplit(":", 1)[0]
+    if hostname.lower() not in LOCAL_HOSTS:
+        return JSONResponse({"detail": "Only available from this computer."}, status_code=403)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get(ACTION_HEADER) != "1":
+        return JSONResponse({"detail": "Missing X-Clip-Manager header."}, status_code=403)
+    return await call_next(request)
 
 
 def _clip_or_404(clip_id: str) -> dict:
@@ -63,12 +113,11 @@ def status():
         "ffmpeg": bool(media.ffmpeg_exe()),
         "mode": s.ai_mode,
     }
-    try:
-        import faster_whisper  # noqa: F401
-        out["whisper"] = True
-    except ImportError:
-        out["whisper"] = False
-    out["embeddings"] = embed.available()
+    out["whisper"] = importlib.util.find_spec("faster_whisper") is not None
+    out["embeddings_state"] = embed.status()
+    out["embeddings"] = out["embeddings_state"] == "ready"
+    out["whisper_error"] = transcribe.last_error()
+    out["whisper_device"] = transcribe.device_in_use()
     for name in ("local", "claude"):
         try:
             ok, msg = get_provider(name).available()
@@ -215,12 +264,22 @@ def ask(clip_id: str, body: dict = Body(...)):
         _bad(e)
 
 
+def _ensure_file(clip: dict) -> dict:
+    """Videos aren't kept after analysis by default: fetch one again when it's needed."""
+    if clip.get("file_path") and Path(clip["file_path"]).exists():
+        return clip
+    try:
+        path = media.download(clip, clip["streamer_login"])
+    except media.MediaError as e:
+        _bad(e)
+    db.update("clips", "id", clip["id"], file_path=str(path))
+    return {**clip, "file_path": str(path)}
+
+
 @app.post("/api/clips/{clip_id}/reveal")
 def reveal(clip_id: str):
-    clip = _clip_or_404(clip_id)
-    path = clip.get("file_path")
-    if not path or not Path(path).exists():
-        _bad(ValueError("Clip isn't downloaded yet"))
+    clip = _ensure_file(_clip_or_404(clip_id))
+    path = clip["file_path"]
     if sys.platform.startswith("win"):
         subprocess.Popen(["explorer", "/select,", path])
     elif sys.platform == "darwin":
@@ -244,7 +303,21 @@ def jobs(limit: int = 100):
                     CASE WHEN j.status IN ('queued') THEN j.created_at END ASC,
                     j.updated_at DESC
            LIMIT ?""", [limit])
-    return {"counts": counts, "jobs": rows}
+    waiting = db.query_one("SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND kind='analyze'")["n"]
+    return {"counts": counts, "jobs": rows, "paused": worker.paused() or None,
+            "error_groups": worker.error_groups(), "eta_seconds": worker.estimate_seconds(waiting)}
+
+
+@app.post("/api/jobs/pause")
+def pause_jobs():
+    worker.pause()
+    return {"ok": True}
+
+
+@app.post("/api/jobs/resume")
+def resume_jobs():
+    worker.resume()
+    return {"ok": True}
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -264,6 +337,7 @@ def retry_failed():
     for cid in ids:
         worker.enqueue_analyze(cid)
     db.execute("DELETE FROM jobs WHERE status = 'error'")
+    worker.resume()
     return {"queued": len(ids)}
 
 
@@ -291,6 +365,7 @@ def resolve_send(body: dict = Body(...)):
     clips = [_clip_or_404(cid) for cid in body.get("ids") or []]
     try:
         res = resolve_bridge.get_resolve()
+        clips = [_ensure_file(c) for c in clips]
         return resolve_bridge.push_clips(res, [_resolve_item(c) for c in clips],
                                          config.get_settings().resolve_bin_root, bool(body.get("append")))
     except resolve_bridge.ResolveError as e:
@@ -304,18 +379,35 @@ def resolve_queue_add(body: dict = Body(...)):
         _clip_or_404(cid)
         db.execute("INSERT INTO resolve_queue (clip_id, append_to_timeline, created_at) VALUES (?,?,?)",
                    [cid, int(bool(body.get("append"))), db.now()])
+    # Videos aren't kept after analysis by default; fetch them now so Resolve's script
+    # finds them ready.
+    threading.Thread(target=_fetch_files, args=(list(ids),), daemon=True).start()
     return {"queued": len(ids)}
+
+
+def _fetch_files(ids: list[str]) -> None:
+    for cid in ids:
+        clip = analyze.get_clip(cid)
+        if not clip:
+            continue
+        try:
+            _ensure_file(clip)
+        except Exception as e:
+            logging.getLogger(__name__).warning("Couldn't download %s for Resolve: %s", cid, getattr(e, "detail", e))
 
 
 @app.get("/api/resolve/queue")
 def resolve_queue():
     rows = db.query("SELECT * FROM resolve_queue WHERE sent_at IS NULL ORDER BY id")
-    items = []
+    items, waiting = [], 0
     for r in rows:
         clip = analyze.get_clip(r["clip_id"])
+        if clip and not (clip.get("file_path") and Path(clip["file_path"]).exists()):
+            waiting += 1  # still downloading; picked up on the next run
+            continue
         if clip:
             items.append(_resolve_item(clip, bool(r["append_to_timeline"]), r["id"]))
-    return {"items": items, "bin_root": config.get_settings().resolve_bin_root}
+    return {"items": items, "waiting": waiting, "bin_root": config.get_settings().resolve_bin_root}
 
 
 @app.post("/api/resolve/queue/ack")
@@ -328,6 +420,107 @@ def resolve_ack(body: dict = Body(...)):
 @app.get("/api/resolve/bridge.py", response_class=PlainTextResponse)
 def resolve_bridge_source():
     return Path(resolve_bridge.__file__).read_text("utf-8")
+
+
+# ---------- setup: Ollama, Resolve, keys, diagnostics ----------
+
+@app.get("/api/ollama/status")
+def ollama_status():
+    return ollama_manager.status()
+
+
+@app.post("/api/ollama/use")
+def ollama_use(body: dict = Body(...)):
+    """Choose the model folder + model; sets OLLAMA_MODELS system-wide as the user asked."""
+    done = ollama_manager.apply_choice(body.get("store") or None, body.get("model") or ollama_manager.DEFAULT_MODEL)
+    return {"done": done, "status": ollama_manager.status()}
+
+
+@app.post("/api/ollama/start")
+def ollama_start():
+    if not ollama_manager.start():
+        _bad(ValueError("Ollama didn't start. Is it installed? Get it from ollama.com/download"))
+    return ollama_manager.status()
+
+
+@app.post("/api/ollama/restart")
+def ollama_restart(body: dict = Body(default={})):
+    store = body.get("store") or config.get_settings().ollama_models_dir
+    if not ollama_manager.restart(store):
+        _bad(ValueError("Ollama didn't come back after restarting. Open it from the Start menu."))
+    return ollama_manager.status()
+
+
+@app.post("/api/ollama/pull")
+def ollama_pull(body: dict = Body(default={})):
+    if not ollama_manager.ensure_running():
+        _bad(ValueError("Ollama isn't running and couldn't be started."))
+    ollama_manager.pull_in_background(body.get("model") or config.get_settings().ollama_model)
+    return ollama_manager.pull_state()
+
+
+@app.get("/api/resolve/status")
+def resolve_status():
+    return resolve_setup.script_status()
+
+
+@app.post("/api/resolve/install-script")
+def resolve_install_script():
+    try:
+        return resolve_setup.install_script()
+    except OSError as e:
+        _bad(ValueError(f"Couldn't install the Resolve script: {e}"))
+
+
+@app.post("/api/resolve/test")
+def resolve_test():
+    return resolve_setup.check_connection()
+
+
+@app.post("/api/setup/test-twitch")
+def setup_test_twitch(body: dict = Body(default={})):
+    s = config.get_settings()
+    cid = body.get("client_id") or s.twitch_client_id
+    secret = body.get("client_secret")
+    if not secret or secret.startswith("••"):
+        secret = s.twitch_client_secret
+    try:
+        TwitchClient(cid, secret)._get_token()
+    except TwitchError as e:
+        return {"ok": False, "message": str(e)}
+    except Exception as e:
+        return {"ok": False, "message": f"Couldn't reach Twitch: {e}"}
+    return {"ok": True, "message": "Twitch accepted your keys."}
+
+
+@app.post("/api/setup/test-claude")
+def setup_test_claude(body: dict = Body(default={})):
+    import anthropic
+    key = body.get("api_key")
+    if not key or key.startswith("••"):
+        key = config.get_settings().anthropic_api_key
+    if not key:
+        return {"ok": False, "message": "Paste your API key first."}
+    try:
+        anthropic.Anthropic(api_key=key, max_retries=0, timeout=15).models.list(limit=1)
+    except anthropic.AuthenticationError:
+        return {"ok": False, "message": "Claude rejected that key. Copy it again from console.anthropic.com."}
+    except anthropic.APIConnectionError:
+        return {"ok": False, "message": "Couldn't reach Claude. Check your internet connection."}
+    except anthropic.APIStatusError as e:
+        return {"ok": False, "message": f"Claude answered {e.status_code}: {e.message}"}
+    return {"ok": True, "message": "Claude accepted your key."}
+
+
+@app.post("/api/setup/complete")
+def setup_complete(body: dict = Body(default={})):
+    config.save_settings({"setup_complete": bool(body.get("complete", True))})
+    return {"ok": True}
+
+
+@app.get("/api/diagnostics", response_class=PlainTextResponse)
+def get_diagnostics():
+    return diagnostics.report(status())
 
 
 # ---------- media ----------
