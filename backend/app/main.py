@@ -121,6 +121,7 @@ def status():
         "twitch": bool(s.twitch_client_id and s.twitch_client_secret),
         "ffmpeg": bool(media.ffmpeg_exe()),
         "mode": s.ai_mode,
+        "claude_model": s.claude_model,
         "version": diagnostics._git_version(),
     }
     out["whisper"] = importlib.util.find_spec("faster_whisper") is not None

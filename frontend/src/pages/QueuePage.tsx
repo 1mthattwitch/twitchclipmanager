@@ -1,11 +1,12 @@
 import { useEffect } from "react";
-import { api, fmtDuration, type Job, type QueueInfo } from "../api";
+import { api, fmtDuration, perClipCost, type Job, type QueueInfo, type Status } from "../api";
 import { Button, Empty, Icon, LargeTitle, ProgressRing, Spinner, useToast } from "../components/ui";
 
 const KIND_LABEL = { sync: "Fetching clips", analyze: "Watching clip", verify: "Double-checking" } as const;
 
-export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }: {
-  version?: string;
+export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, status, onModeChanged }: {
+  status: Status | null;
+  onModeChanged: () => void;
   jobs: Job[];
   counts: Record<string, number>;
   info: QueueInfo;
@@ -31,6 +32,14 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
   const finished = jobs.filter((j) => !["running", "queued"].includes(j.status));
 
   const paused = info.paused;
+  const version = status?.version;
+  const onClaude = status?.mode === "claude";
+  const waiting = counts.queued ?? 0;
+  const useLocal = () => act(async () => {
+    await api.put("/api/settings", { ai_mode: "local" });
+    await api.post("/api/jobs/resume");
+    onModeChanged();
+  }, "Switched to Local (offline). Analysis resumed.");
   const now = running.find((j) => j.kind === "analyze" && j.message);
   const subtitle = paused
     ? `Paused · ${(counts.queued ?? 0).toLocaleString()} waiting`
@@ -60,6 +69,7 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
             Paused {new Date(paused.at * 1000).toLocaleString()}{version ? ` · running version ${version}` : ""}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
+            {onClaude && <Button onClick={useLocal}>Use Local (offline) instead</Button>}
             {paused.auto && <Button kind="gray" onClick={onFix}>Fix it: open setup</Button>}
             <Button onClick={() => act(() => api.post("/api/jobs/resume"), "Resumed")}>Resume</Button>
           </div>
@@ -71,6 +81,16 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
         <Stat label="Done" value={counts.done ?? 0} color="var(--green)" />
         <Stat label="Failed" value={counts.error ?? 0} color={counts.error ? "var(--red)" : undefined} />
       </div>
+
+      {onClaude && waiting > 0 && !paused && (
+        <div className="mb-4 rounded-[14px] bg-bg2 p-3.5 text-[14px]" data-testid="claude-cost">
+          <div className="font-semibold">Using Claude (online), which is paid per clip</div>
+          <div className="mt-1 text-label2">
+            The {waiting.toLocaleString()} waiting clips would cost roughly ${Math.round(perClipCost(status?.claude_model ?? "") * waiting).toLocaleString()} with {status?.claude_model}. Local (offline) is free and runs on your graphics card.
+          </div>
+          <div className="mt-3"><Button kind="gray" onClick={useLocal}>Use Local (offline) instead</Button></div>
+        </div>
+      )}
 
       {!!info.error_groups.length && (
         <section className="mb-6" aria-label="Why clips failed">

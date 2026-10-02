@@ -189,3 +189,11 @@ def test_search_and_status_never_wait_for_model_download(monkeypatch):
         assert embed.status() == "loading"
     finally:
         embed._lock.release()
+
+
+def test_claude_out_of_credit_is_explained():
+    msg = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."
+    client, _, _ = _fake_client(_bad_request(msg), _bad_request(msg))
+    with pytest.raises(AIError) as e:
+        ClaudeProvider(client=client).generate_json("s", "p", [], {"type": "object"})
+    assert "out of credit" in str(e.value) and "Local (offline)" in str(e.value) and not e.value.transient

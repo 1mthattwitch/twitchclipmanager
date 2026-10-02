@@ -1,17 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type Settings, type Status } from "../api";
+import { api, perClipCost, type Settings, type Status } from "../api";
 import { Button, Group, LargeTitle, Row, Segmented, TextInput, Toggle, useToast } from "../components/ui";
 
-// Rough per-clip usage: ~6 frames at 512px plus transcript, two calls (describe + double-check).
-const CLAUDE_PRICES: Record<string, [number, number]> = {
-  "claude-opus-5-5": [4, 20],
-  "claude-sonnet-5-5": [2, 10],
-  "claude-haiku-4-5": [1, 5],
-};
-function perClipCost(model: string) {
-  const [inp, out] = CLAUDE_PRICES[model] ?? [4, 20];
-  return (6000 * inp + 1500 * out) / 1_000_000;
-}
 
 function Dot({ ok }: { ok: boolean }) {
   return <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: ok ? "var(--green)" : "var(--orange)" }} />;

@@ -249,3 +249,18 @@ def test_old_failures_are_marked_as_before_restart(page, server):
     expect(section).to_contain_text("metadata_errors")
     expect(section).to_contain_text("Before the last restart")
     httpx.post(server + "/api/jobs/clear-finished", headers={"X-Clip-Manager": "1"})
+
+
+def test_claude_problem_can_switch_to_local(page, server):
+    import httpx
+    h = {"X-Clip-Manager": "1"}
+    httpx.put(server + "/api/settings", json={"ai_mode": "claude"}, headers=h).raise_for_status()
+    httpx.post(server + "/api/jobs/pause", headers=h).raise_for_status()
+    pg = page
+    pg.reload()
+    pg.get_by_role("button", name="Queue").first.click()
+    pg.get_by_role("alert").get_by_role("button", name="Use Local (offline) instead").click()
+    pg.get_by_text("Switched to Local (offline)").wait_for()
+    expect(pg.get_by_role("alert")).to_have_count(0)
+    s = httpx.get(server + "/api/settings").json()["settings"]
+    assert s["ai_mode"] == "local" and httpx.get(server + "/api/jobs").json()["paused"] is None
