@@ -9,6 +9,9 @@ import anthropic
 from .. import config
 from .base import AIError, Provider, b64
 
+NO_CREDIT = ("Your Anthropic account is out of credit. Add credit at console.anthropic.com "
+             "(Settings > Billing), or switch to Local (offline), which is free.")
+
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
@@ -68,6 +71,8 @@ class ClaudeProvider(Provider):
         except anthropic.RateLimitError as e:
             raise AIError("Claude rate limit hit; the clip will be retried.", transient=True) from e
         except anthropic.APIStatusError as e:
+            if "credit balance" in str(e.message).lower():
+                raise AIError(NO_CREDIT) from e
             raise AIError(f"Claude API error {e.status_code}: {e.message}", transient=e.status_code >= 500) from e
         except anthropic.APIConnectionError as e:
             raise AIError("Couldn't reach Claude. Are you offline? Switch to Local in Settings.", transient=True) from e

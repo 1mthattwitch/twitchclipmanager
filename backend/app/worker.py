@@ -34,6 +34,7 @@ _wake = threading.Event()
 _threads: list[threading.Thread] = []
 _streak = {"reason": None, "n": 0}
 _durations: deque[float] = deque(maxlen=20)  # seconds per recent analysis
+STARTED_AT = time.time()  # failures older than this happened before the app (re)started
 
 
 # ---------- pausing ----------
@@ -84,12 +85,16 @@ def _note_result(job: dict, error: Exception | None) -> None:
 
 
 def error_groups(limit: int = 5) -> list[dict]:
-    groups: dict[str, int] = {}
-    for r in db.query("SELECT message FROM jobs WHERE status = 'error'"):
-        key = normalize_reason(r["message"])
-        groups[key] = groups.get(key, 0) + 1
-    top = sorted(groups.items(), key=lambda kv: -kv[1])[:limit]
-    return [{"reason": k, "count": n} for k, n in top]
+    """Failures grouped by reason. "old" groups all happened before this start, often
+    on an older version, so they may already be fixed."""
+    groups: dict[str, dict] = {}
+    for r in db.query("SELECT message, updated_at FROM jobs WHERE status = 'error'"):
+        g = groups.setdefault(normalize_reason(r["message"]), {"count": 0, "old": True})
+        g["count"] += 1
+        if (r["updated_at"] or 0) >= STARTED_AT:
+            g["old"] = False
+    top = sorted(groups.items(), key=lambda kv: (kv[1]["old"], -kv[1]["count"]))[:limit]
+    return [{"reason": k, **g} for k, g in top]
 
 
 def estimate_seconds(waiting: int) -> float | None:

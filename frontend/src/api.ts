@@ -28,9 +28,20 @@ export type QA = {
 
 export type QueueInfo = {
   paused: { reason: string; at: number; auto: boolean } | null;
-  error_groups: { reason: string; count: number }[];
+  error_groups: { reason: string; count: number; old: boolean }[];
   eta_seconds: number | null;
 };
+
+// Rough per-clip usage: ~6 frames at 512px plus transcript, two calls (describe + double-check).
+const CLAUDE_PRICES: Record<string, [number, number]> = {
+  "claude-opus-5-5": [4, 20],
+  "claude-sonnet-5-5": [2, 10],
+  "claude-haiku-4-5": [1, 5],
+};
+export function perClipCost(model: string) {
+  const [inp, out] = CLAUDE_PRICES[model] ?? [4, 20];
+  return (6000 * inp + 1500 * out) / 1_000_000;
+}
 
 export function fmtDuration(sec: number) {
   if (sec < 90) return "about a minute";
@@ -119,6 +130,7 @@ export type Status = {
   embeddings_state?: "ready" | "loading" | "off";
   whisper_device?: string | null;
   mode: "local" | "claude";
+  claude_model?: string;
   version?: string;
   local: { ok: boolean; message: string };
   claude: { ok: boolean; message: string };

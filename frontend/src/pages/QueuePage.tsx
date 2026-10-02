@@ -1,11 +1,12 @@
 import { useEffect } from "react";
-import { api, fmtDuration, type Job, type QueueInfo } from "../api";
+import { api, fmtDuration, perClipCost, type Job, type QueueInfo, type Status } from "../api";
 import { Button, Empty, Icon, LargeTitle, ProgressRing, Spinner, useToast } from "../components/ui";
 
 const KIND_LABEL = { sync: "Fetching clips", analyze: "Watching clip", verify: "Double-checking" } as const;
 
-export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }: {
-  version?: string;
+export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, status, onModeChanged }: {
+  status: Status | null;
+  onModeChanged: () => void;
   jobs: Job[];
   counts: Record<string, number>;
   info: QueueInfo;
@@ -31,6 +32,15 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
   const finished = jobs.filter((j) => !["running", "queued"].includes(j.status));
 
   const paused = info.paused;
+  const version = status?.version;
+  const onClaude = status?.mode === "claude";
+  const waiting = counts.queued ?? 0;
+  const useLocal = () => act(async () => {
+    await api.put("/api/settings", { ai_mode: "local" });
+    await api.post("/api/jobs/resume");
+    onModeChanged();
+  }, "Switched to Local (offline). Analysis resumed.");
+  const now = running.find((j) => j.kind === "analyze" && j.message);
   const subtitle = paused
     ? `Paused · ${(counts.queued ?? 0).toLocaleString()} waiting`
     : `${counts.running ?? 0} running · ${(counts.queued ?? 0).toLocaleString()} waiting${info.eta_seconds ? ` · ${fmtDuration(info.eta_seconds)} left` : ""}`;
@@ -38,6 +48,11 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
   return (
     <div className="mx-auto max-w-2xl px-4 pb-32 sm:px-6">
       <LargeTitle title="Queue" subtitle={subtitle} />
+      {now && !paused && (
+        <div className="-mt-2 mb-4 flex items-center gap-2 px-1 text-[14px] text-label2" data-testid="queue-now">
+          <Spinner size={14} /> <span className="truncate">Now: {now.clip_title || "a clip"} · {now.message}</span>
+        </div>
+      )}
 
       {paused && (
         <div role="alert" className="mb-4 rounded-[14px] p-3.5" style={{ background: "color-mix(in srgb, var(--red) 14%, transparent)" }}>
@@ -54,6 +69,7 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
             Paused {new Date(paused.at * 1000).toLocaleString()}{version ? ` · running version ${version}` : ""}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
+            {onClaude && <Button onClick={useLocal}>Use Local (offline) instead</Button>}
             {paused.auto && <Button kind="gray" onClick={onFix}>Fix it: open setup</Button>}
             <Button onClick={() => act(() => api.post("/api/jobs/resume"), "Resumed")}>Resume</Button>
           </div>
@@ -66,14 +82,27 @@ export function QueuePage({ jobs, counts, info, reload, onOpen, onFix, version }
         <Stat label="Failed" value={counts.error ?? 0} color={counts.error ? "var(--red)" : undefined} />
       </div>
 
+      {onClaude && waiting > 0 && !paused && (
+        <div className="mb-4 rounded-[14px] bg-bg2 p-3.5 text-[14px]" data-testid="claude-cost">
+          <div className="font-semibold">Using Claude (online), which is paid per clip</div>
+          <div className="mt-1 text-label2">
+            The {waiting.toLocaleString()} waiting clips would cost roughly ${Math.round(perClipCost(status?.claude_model ?? "") * waiting).toLocaleString()} with {status?.claude_model}. Local (offline) is free and runs on your graphics card.
+          </div>
+          <div className="mt-3"><Button kind="gray" onClick={useLocal}>Use Local (offline) instead</Button></div>
+        </div>
+      )}
+
       {!!info.error_groups.length && (
         <section className="mb-6" aria-label="Why clips failed">
           <h3 className="mb-1.5 px-4 text-[13px] uppercase tracking-wide text-label2">Why clips failed</h3>
           <ul className="overflow-hidden rounded-[14px] bg-bg2">
             {info.error_groups.map((g, i, arr) => (
-              <li key={g.reason} className={`flex items-start gap-3 px-3 py-2.5 text-[14px] ${i < arr.length - 1 ? "hairline" : ""}`}>
-                <span className="shrink-0 font-semibold tabular-nums" style={{ color: "var(--red)" }}>{g.count.toLocaleString()}×</span>
-                <span className="min-w-0 break-words text-label">{g.reason}</span>
+              <li key={g.reason} className={`flex items-start gap-3 px-3 py-2.5 text-[14px] ${i < arr.length - 1 ? "hairline" : ""} ${g.old ? "opacity-60" : ""}`}>
+                <span className="shrink-0 font-semibold tabular-nums" style={{ color: g.old ? "var(--label-2)" : "var(--red)" }}>{g.count.toLocaleString()}×</span>
+                <span className="min-w-0 break-words text-label">
+                  {g.reason}
+                  {g.old && <span className="block text-[12px] text-label2">Before the last restart, so it may already be fixed. Press Retry failed to try these again.</span>}
+                </span>
               </li>
             ))}
           </ul>
